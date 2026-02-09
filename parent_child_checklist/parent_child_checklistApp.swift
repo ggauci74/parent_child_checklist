@@ -9,9 +9,12 @@ import SwiftUI
 
 @main
 struct parent_child_checklistApp: App {
+    @StateObject private var appState = AppState()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(appState)
         }
     }
 }
