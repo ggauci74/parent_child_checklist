@@ -1,41 +1,50 @@
 //
-// AppState.swift
-// parent_child_checklist
+//  AppState.swift
+//  parent_child_checklist
 //
 
 import SwiftUI
 import Combine
 import Foundation
+import CloudKit
 
 @MainActor
 final class AppState: ObservableObject {
 
-    // MARK: - Published State
+    // MARK: - Published State (UI Source of Truth)
     @Published var children: [ChildProfile] = []
     @Published var tasks: [TaskItem] = [] // legacy / placeholder
 
-    /// Parent-created task library
+    // Parent-created task library
     @Published var taskTemplates: [TaskTemplate] = []
 
-    /// Task assignments + completions
+    // Task assignments + completions
     @Published var taskAssignments: [TaskAssignment] = []
     @Published var taskCompletions: [TaskCompletionRecord] = []
 
-    /// Shared emoji library
+    // Shared emoji library
     @Published var customEmojis: [String] = []
 
-    /// Event library (templates)
+    // Event library (templates)
     @Published var eventTemplates: [EventTemplate] = []
 
-    /// Event assignments (per child)
+    // Event assignments (per child)
     @Published var eventAssignments: [EventAssignment] = []
 
-    /// Locations (used by event assignments)
+    // Locations (used by event assignments)
     @Published var locations: [LocationItem] = []
+
+    // MARK: - CloudKit status (read-only phase)
+    /// Whether we successfully loaded non-empty user data from CloudKit on this launch.
+    @Published private(set) var cloudKitLoaded: Bool = false
+    /// If bootstrap failed, any error message here (for logging/diagnostics UI if desired).
+    @Published private(set) var cloudKitErrorMessage: String? = nil
+    /// The resolved family context (shared vs. private owner, zone & FamilyMeta recordID).
+    @Published private(set) var familyContext: FamilyCoordinator.FamilyContext? = nil
 
     private var cancellables = Set<AnyCancellable>()
 
-    // MARK: - File names
+    // MARK: - JSON Cache File Names
     private let childrenFileName = "children.json"
     private let taskTemplatesFileName = "taskTemplates.json"
     private let customEmojisFileName = "customEmojis.json"
@@ -45,8 +54,19 @@ final class AppState: ObservableObject {
     private let eventAssignmentsFileName = "eventAssignments.json"
     private let locationsFileName = "locations.json"
 
+    // MARK: - CloudKit (read-only integration for now)
+    /// Family data loader (bootstraps family & loads records); JSON remains as cache.
+    private let familyStore = FamilyDataStore(containerIdentifier: nil)
+
+    /// A lightweight coordinator we reuse to fetch the current FamilyContext
+    /// (zone, database kind, FamilyMeta recordID) for future sharing UI.
+    private let shareCoordinator = FamilyCoordinator(
+        ck: CloudKitService(config: .init(containerIdentifier: nil))
+    )
+
     // MARK: - Init
     init() {
+        // Load local JSON cache first → immediate UI
         loadChildren()
         loadTaskTemplates()
         loadCustomEmojis()
@@ -59,12 +79,19 @@ final class AppState: ObservableObject {
         if children.isEmpty {
             seedSampleData()
         }
+
+        // Debounced autosave to JSON (we'll add CloudKit writes later)
         setupAutoSave()
+
+        // CloudKit bootstrap (read-only): load family if CloudKit already has user data
+        Task {
+            await bootstrapFromCloudKit()
+        }
     }
 
     func seedSampleData() { }
 
-    // ISO-like calendar (Monday-first)
+    // MARK: - Calendar helpers (ISO-like, Monday-first)
     private var isoCalendar: Calendar {
         var cal = Calendar(identifier: .iso8601)
         cal.timeZone = .current
@@ -74,9 +101,7 @@ final class AppState: ObservableObject {
     // MARK: - Name normalization
     private func normalizedName(_ input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        let collapsedSpaces = trimmed
-            .split(whereSeparator: { $0.isWhitespace })
-            .joined(separator: " ")
+        let collapsedSpaces = trimmed.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         return collapsedSpaces.lowercased()
     }
 
@@ -241,7 +266,7 @@ final class AppState: ObservableObject {
         eventTemplates.removeAll { $0.id == id }
     }
 
-    // MARK: - Avatar (preset) uniqueness + update
+    // MARK: - Avatar uniqueness + update
     func isAvatarTaken(_ avatarId: String, excluding childId: UUID? = nil) -> Bool {
         let t = avatarId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
@@ -282,7 +307,9 @@ final class AppState: ObservableObject {
         guard !isCustomEmojiTaken(t) else { return false }
 
         customEmojis.append(t)
-        customEmojis = Array(NSOrderedSet(array: customEmojis)) as? [String] ?? customEmojis
+        // De-duplicate while preserving order
+        var seen = Set<String>()
+        customEmojis = customEmojis.filter { seen.insert($0).inserted }
         return true
     }
 
@@ -295,7 +322,7 @@ final class AppState: ObservableObject {
         customEmojis = []
     }
 
-    // MARK: - Locations CRUD (rename propagation to event ASSIGNMENTS)
+    // MARK: - Locations CRUD (rename propagation to event assignments)
     @discardableResult
     func createLocation(name: String) -> LocationItem? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -577,7 +604,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Auto Save
+    // MARK: - Auto Save (JSON cache)
     private func setupAutoSave() {
         $children.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.saveChildren() }
@@ -625,7 +652,7 @@ final class AppState: ObservableObject {
         return folder
     }
 
-    // MARK: - Persistence helpers
+    // MARK: - JSON persistence helpers
     private func write<T: Encodable>(_ value: T, to url: URL, label: String) {
         do {
             let data = try JSONEncoder().encode(value)
@@ -646,531 +673,105 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Persistence URLs
-    private func childrenFileURL() -> URL { appFolderURL().appendingPathComponent(childrenFileName) }
-    private func taskTemplatesFileURL() -> URL { appFolderURL().appendingPathComponent(taskTemplatesFileName) }
-    private func customEmojisFileURL() -> URL { appFolderURL().appendingPathComponent(customEmojisFileName) }
+    // MARK: - JSON file URLs
+    private func childrenFileURL()        -> URL { appFolderURL().appendingPathComponent(childrenFileName) }
+    private func taskTemplatesFileURL()   -> URL { appFolderURL().appendingPathComponent(taskTemplatesFileName) }
+    private func customEmojisFileURL()    -> URL { appFolderURL().appendingPathComponent(customEmojisFileName) }
     private func taskAssignmentsFileURL() -> URL { appFolderURL().appendingPathComponent(taskAssignmentsFileName) }
     private func taskCompletionsFileURL() -> URL { appFolderURL().appendingPathComponent(taskCompletionsFileName) }
-    private func eventTemplatesFileURL() -> URL { appFolderURL().appendingPathComponent(eventTemplatesFileName) }
-    private func eventAssignmentsFileURL() -> URL { appFolderURL().appendingPathComponent(eventAssignmentsFileName) }
-    private func locationsFileURL() -> URL { appFolderURL().appendingPathComponent(locationsFileName) }
+    private func eventTemplatesFileURL()  -> URL { appFolderURL().appendingPathComponent(eventTemplatesFileName) }
+    private func eventAssignmentsFileURL()-> URL { appFolderURL().appendingPathComponent(eventAssignmentsFileName) }
+    private func locationsFileURL()       -> URL { appFolderURL().appendingPathComponent(locationsFileName) }
 
-    // MARK: - Persistence (Children)
+    // MARK: - JSON persistence (Children)
     private func saveChildren() { write(children, to: childrenFileURL(), label: "children") }
     private func loadChildren() { children = read([ChildProfile].self, from: childrenFileURL(), label: "children") ?? [] }
 
-    // MARK: - Persistence (Task Templates)
+    // MARK: - JSON persistence (Task Templates)
     private func saveTaskTemplates() { write(taskTemplates, to: taskTemplatesFileURL(), label: "task templates") }
     private func loadTaskTemplates() { taskTemplates = read([TaskTemplate].self, from: taskTemplatesFileURL(), label: "task templates") ?? [] }
 
-    // MARK: - Persistence (Custom Emojis)
+    // MARK: - JSON persistence (Custom Emojis)
     private func saveCustomEmojis() { write(customEmojis, to: customEmojisFileURL(), label: "custom emojis") }
     private func loadCustomEmojis() { customEmojis = read([String].self, from: customEmojisFileURL(), label: "custom emojis") ?? [] }
 
-    // MARK: - Persistence (Task Assignments)
+    // MARK: - JSON persistence (Task Assignments)
     private func saveTaskAssignments() { write(taskAssignments, to: taskAssignmentsFileURL(), label: "task assignments") }
     private func loadTaskAssignments() { taskAssignments = read([TaskAssignment].self, from: taskAssignmentsFileURL(), label: "task assignments") ?? [] }
 
-    // MARK: - Persistence (Task Completions)
+    // MARK: - JSON persistence (Task Completions)
     private func saveTaskCompletions() { write(taskCompletions, to: taskCompletionsFileURL(), label: "task completions") }
     private func loadTaskCompletions() { taskCompletions = read([TaskCompletionRecord].self, from: taskCompletionsFileURL(), label: "task completions") ?? [] }
 
-    // MARK: - Persistence (Event Templates)
+    // MARK: - JSON persistence (Event Templates)
     private func saveEventTemplates() { write(eventTemplates, to: eventTemplatesFileURL(), label: "event templates") }
     private func loadEventTemplates() { eventTemplates = read([EventTemplate].self, from: eventTemplatesFileURL(), label: "event templates") ?? [] }
 
-    // MARK: - Persistence (Event Assignments)
+    // MARK: - JSON persistence (Event Assignments)
     private func saveEventAssignments() { write(eventAssignments, to: eventAssignmentsFileURL(), label: "event assignments") }
     private func loadEventAssignments() { eventAssignments = read([EventAssignment].self, from: eventAssignmentsFileURL(), label: "event assignments") ?? [] }
 
-    // MARK: - Persistence (Locations)
+    // MARK: - JSON persistence (Locations)
     private func saveLocations() { write(locations, to: locationsFileURL(), label: "locations") }
     private func loadLocations() { locations = read([LocationItem].self, from: locationsFileURL(), label: "locations") ?? [] }
-}
-// MARK: - Add Task Template (Emoji-only picker + My Emojis sheet)
-// MARK: - Add Task Template (Emoji-only picker + My Emojis sheet)
-struct AddTaskTemplateView: View {
-    @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
 
-    @State private var title: String = ""
-    @State private var searchText: String = ""
-    @State private var selectedEmoji: String? = nil
-    @State private var selectedCategory: EmojiCatalog.Category = .all
-    @State private var validationMessage: String? = nil
-    @FocusState private var titleFocused: Bool
+    // MARK: - CloudKit bootstrap (read-only)
+    private func bootstrapFromCloudKit() async {
+        do {
+            // 1) Load snapshot of records from CloudKit (if any)
+            let snapshot = try await familyStore.loadSnapshot()
 
-    // ✅ NEW: Reward points (default 1)
-    @State private var rewardPoints: Int = 1
+            // 2) Also resolve the current family context (for sharing UI later)
+            do {
+                let s = try await shareCoordinator.bootstrapFamily()
+                switch s {
+                case .shared(let ctx), .privateOwner(let ctx):
+                    self.familyContext = ctx
+                }
+            } catch {
+                // Not fatal for data; just log for sharing UI
+                print("⚠️ Failed to resolve FamilyContext: \(error)")
+            }
 
-    // Sheet
-    @State private var showMyEmojisSheet = false
+            // 3) Only apply if CloudKit actually has user data
+            guard FamilyDataStore.hasUserData(snapshot) else {
+                cloudKitLoaded = false
+                cloudKitErrorMessage = nil
+                print("ℹ️ CloudKit snapshot empty — keeping local JSON as source for now.")
+                return
+            }
 
-    private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
+            // Apply snapshot to @Published arrays
+            self.children        = snapshot.children
+            self.taskTemplates   = snapshot.taskTemplates
+            self.taskAssignments = snapshot.taskAssignments
+            self.taskCompletions = snapshot.taskCompletions
+            self.customEmojis    = snapshot.customEmojis
+            self.eventTemplates  = snapshot.eventTemplates
+            self.eventAssignments = snapshot.eventAssignments
+            self.locations       = snapshot.locations
 
-    private var trimmedTitle: String { title.trimmed }
+            cloudKitLoaded = true
+            cloudKitErrorMessage = nil
+            print("✅ CloudKit loaded family snapshot (\(children.count) children, \(taskTemplates.count) templates, \(eventTemplates.count) events)")
 
-    private var isDuplicate: Bool {
-        !trimmedTitle.isEmpty && appState.isTaskTitleTaken(trimmedTitle)
-    }
-
-    private var canSave: Bool {
-        !trimmedTitle.isEmpty && !isDuplicate && (selectedEmoji != nil)
-    }
-
-    private var baseEmojis: [String] {
-        switch selectedCategory {
-        case .myEmojis:
-            return appState.customEmojis
-        case .all, .morning, .hygiene, .school, .chores, .food, .pets, .sports, .time, .rewards, .health, .outdoors:
-            return EmojiCatalog.emojis(for: selectedCategory)
+        } catch {
+            cloudKitLoaded = false
+            cloudKitErrorMessage = String(describing: error)
+            print("❌ CloudKit bootstrap failed: \(error)")
         }
     }
 
-    private var filteredEmojis: [String] {
-        let q = searchText.trimmed
-        if q.isEmpty { return baseEmojis }
-        return baseEmojis.filter { $0.contains(q) }
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Task") {
-                    TextField("Title", text: $title)
-                        .focused($titleFocused)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled(true)
-
-                    if isDuplicate {
-                        Text("That task already exists. Please choose a different name.")
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    } else if let validationMessage {
-                        Text(validationMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    }
-                }
-
-                // ✅ NEW: Reward Points UI
-                Section("Reward Points") {
-                    HStack {
-                        Text("💎 Points")
-                        Spacer()
-
-                        Button {
-                            rewardPoints = max(0, rewardPoints - 1)
-                        } label: {
-                            Image(systemName: "minus.circle.fill")
-                                .font(.title3)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(rewardPoints == 0)
-                        .accessibilityLabel("Decrease reward points")
-
-                        Text("\(rewardPoints)")
-                            .font(.headline)
-                            .frame(minWidth: 32)
-
-                        Button {
-                            rewardPoints += 1
-                        } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.title3)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Increase reward points")
-                    }
-                }
-
-                Section("Icon (Emoji)") {
-                    HStack {
-                        Text("Selected")
-                        Spacer()
-                        if let selectedEmoji {
-                            Text(selectedEmoji).font(.system(size: 32))
-                        } else {
-                            Text("—").foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Picker("Category", selection: $selectedCategory) {
-                        ForEach(EmojiCatalog.Category.allCases) { cat in
-                            Text(cat.rawValue).tag(cat)
-                        }
-                    }
-
-                    TextField("Search", text: $searchText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-
-                    // ✅ Stable layout inside Form
-                    ScrollView {
-                        LazyVGrid(columns: gridColumns, spacing: 10) {
-                            ForEach(filteredEmojis, id: \.self) { emoji in
-                                Button {
-                                    selectedEmoji = emoji
-                                    validationMessage = nil
-                                } label: {
-                                    Text(emoji)
-                                        .font(.system(size: 24))
-                                        .frame(maxWidth: .infinity, minHeight: 36)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                                .fill(selectedEmoji == emoji ? Color.blue.opacity(0.18) : Color.clear)
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                                .stroke(
-                                                    selectedEmoji == emoji ? Color.blue : Color.secondary.opacity(0.25),
-                                                    lineWidth: selectedEmoji == emoji ? 2 : 1
-                                                )
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(emoji)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .frame(minHeight: 240, maxHeight: 360)
-                    .scrollIndicators(.visible)
-
-                    if selectedCategory == .myEmojis, appState.customEmojis.isEmpty {
-                        Text("No saved emojis yet. Tap “Manage My Emojis” below to add some.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .navigationTitle("Add Task")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .disabled(!canSave)
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                // Bottom button (keeps main UI clean)
-                VStack(spacing: 0) {
-                    Divider()
-                    Button {
-                        showMyEmojisSheet = true
-                    } label: {
-                        HStack {
-                            Text("Manage My Emojis")
-                                .fontWeight(.semibold)
-                            Spacer()
-                            Image(systemName: "chevron.up")
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 12)
-                        .padding(.horizontal)
-                    }
-                    .buttonStyle(.plain)
-                    .background(.ultraThinMaterial)
-                }
-            }
-            .sheet(isPresented: $showMyEmojisSheet) {
-                CustomEmojiLibraryView { picked in
-                    selectedEmoji = picked
-                    // Convenience: switch category to My Emojis after picking
-                    selectedCategory = .myEmojis
-                    searchText = ""
-                }
-                .environmentObject(appState)
-            }
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    titleFocused = true
-                }
-            }
-            .onChange(of: title) { _, _ in validationMessage = nil }
-            .onChange(of: selectedCategory) { _, _ in
-                searchText = ""
+    // MARK: - Helpers for Sharing UI (optional convenience)
+    /// Return the correct CKDatabase for the current family context (or default private DB if unknown)
+    func cloudDatabaseForCurrentFamily() -> CKDatabase {
+        if let ctx = familyContext {
+            switch ctx.database {
+            case .private: return CKContainer.default().privateCloudDatabase
+            case .shared:  return CKContainer.default().sharedCloudDatabase
             }
         }
-    }
-
-    private func save() {
-        validationMessage = nil
-
-        guard !trimmedTitle.isEmpty else {
-            validationMessage = "Please enter a task title."
-            return
-        }
-
-        guard !isDuplicate else {
-            validationMessage = "That task already exists. Please choose a different name."
-            return
-        }
-
-        guard let emoji = selectedEmoji, !emoji.trimmed.isEmpty else {
-            validationMessage = "Please select an emoji."
-            return
-        }
-
-        let points = max(0, rewardPoints)
-
-        if appState.createTaskTemplate(title: trimmedTitle, iconSymbol: emoji, rewardPoints: points) != nil {
-            dismiss()
-        } else {
-            validationMessage = "Couldn’t create task. Please try again."
-        }
-    }
-}
-
-// MARK: - Edit Task Template (Emoji-only picker + My Emojis sheet)
-struct EditTaskTemplateView: View {
-    @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
-
-    let template: TaskTemplate
-
-    @State private var title: String
-    @State private var searchText: String = ""
-    @State private var selectedEmoji: String
-    @State private var selectedCategory: EmojiCatalog.Category = .all
-    @State private var validationMessage: String? = nil
-    @FocusState private var titleFocused: Bool
-    @State private var showMyEmojisSheet = false
-
-    // ✅ NEW: Reward points
-    @State private var rewardPoints: Int
-
-    private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
-
-    init(template: TaskTemplate) {
-        self.template = template
-        _title = State(initialValue: template.title)
-        _selectedEmoji = State(initialValue: template.iconSymbol)
-        _rewardPoints = State(initialValue: max(0, template.rewardPoints))
-    }
-
-    private var trimmedTitle: String { title.trimmed }
-
-    private var isDuplicate: Bool {
-        !trimmedTitle.isEmpty && appState.isTaskTitleTaken(trimmedTitle, excluding: template.id)
-    }
-
-    private var hasChanges: Bool {
-        trimmedTitle != template.title.trimmed ||
-        selectedEmoji != template.iconSymbol ||
-        rewardPoints != max(0, template.rewardPoints)
-    }
-
-    private var canSave: Bool {
-        !trimmedTitle.isEmpty && !isDuplicate && selectedEmoji.trimmed.containsEmoji && hasChanges
-    }
-
-    private var baseEmojis: [String] {
-        switch selectedCategory {
-        case .myEmojis:
-            return appState.customEmojis
-        case .all, .morning, .hygiene, .school, .chores, .food, .pets, .sports, .time, .rewards, .health, .outdoors:
-            return EmojiCatalog.emojis(for: selectedCategory)
-        }
-    }
-
-    private var filteredEmojis: [String] {
-        let q = searchText.trimmed
-        if q.isEmpty { return baseEmojis }
-        return baseEmojis.filter { $0.contains(q) }
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Task") {
-                    TextField("Title", text: $title)
-                        .focused($titleFocused)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled(true)
-
-                    if isDuplicate {
-                        Text("That task already exists. Please choose a different name.")
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    } else if let validationMessage {
-                        Text(validationMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    }
-                }
-
-                // ✅ NEW: Reward Points UI
-                Section("Reward Points") {
-                    HStack {
-                        Text("💎 Points")
-                        Spacer()
-
-                        Button {
-                            rewardPoints = max(0, rewardPoints - 1)
-                        } label: {
-                            Image(systemName: "minus.circle.fill")
-                                .font(.title3)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(rewardPoints == 0)
-                        .accessibilityLabel("Decrease reward points")
-
-                        Text("\(rewardPoints)")
-                            .font(.headline)
-                            .frame(minWidth: 32)
-
-                        Button {
-                            rewardPoints += 1
-                        } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.title3)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Increase reward points")
-                    }
-                }
-                
-                Section("Icon (Emoji)") {
-                    HStack {
-                        Text("Selected")
-                        Spacer()
-                        Text(selectedEmoji.trimmed.containsEmoji ? selectedEmoji : "✅")
-                            .font(.system(size: 32))
-                    }
-
-                    Picker("Category", selection: $selectedCategory) {
-                        ForEach(EmojiCatalog.Category.allCases) { cat in
-                            Text(cat.rawValue).tag(cat)
-                        }
-                    }
-
-                    TextField("Search", text: $searchText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-
-                    ScrollView {
-                        LazyVGrid(columns: gridColumns, spacing: 10) {
-                            ForEach(filteredEmojis, id: \.self) { emoji in
-                                Button {
-                                    selectedEmoji = emoji
-                                    validationMessage = nil
-                                } label: {
-                                    Text(emoji)
-                                        .font(.system(size: 24))
-                                        .frame(maxWidth: .infinity, minHeight: 36)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                                .fill(selectedEmoji == emoji ? Color.blue.opacity(0.18) : Color.clear)
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                                .stroke(
-                                                    selectedEmoji == emoji ? Color.blue : Color.secondary.opacity(0.25),
-                                                    lineWidth: selectedEmoji == emoji ? 2 : 1
-                                                )
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(emoji)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .frame(minHeight: 240, maxHeight: 360)
-                    .scrollIndicators(.visible)
-
-                    if selectedCategory == .myEmojis, appState.customEmojis.isEmpty {
-                        Text("No saved emojis yet. Tap “Manage My Emojis” below to add some.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .navigationTitle("Edit Task")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .disabled(!canSave)
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 0) {
-                    Divider()
-                    Button {
-                        showMyEmojisSheet = true
-                    } label: {
-                        HStack {
-                            Text("Manage My Emojis")
-                                .fontWeight(.semibold)
-                            Spacer()
-                            Image(systemName: "chevron.up")
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 12)
-                        .padding(.horizontal)
-                    }
-                    .buttonStyle(.plain)
-                    .background(.ultraThinMaterial)
-                }
-            }
-            .sheet(isPresented: $showMyEmojisSheet) {
-                CustomEmojiLibraryView { picked in
-                    selectedEmoji = picked
-                    selectedCategory = .myEmojis
-                    searchText = ""
-                }
-                .environmentObject(appState)
-            }
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    titleFocused = true
-                }
-            }
-            .onChange(of: title) { _, _ in validationMessage = nil }
-            .onChange(of: selectedCategory) { _, _ in
-                searchText = ""
-            }
-        }
-    }
-
-    private func save() {
-        validationMessage = nil
-
-        guard !trimmedTitle.isEmpty else {
-            validationMessage = "Task title cannot be empty."
-            return
-        }
-
-        guard !isDuplicate else {
-            validationMessage = "That task already exists. Please choose a different name."
-            return
-        }
-
-        guard selectedEmoji.trimmed.containsEmoji else {
-            validationMessage = "Please select an emoji."
-            return
-        }
-
-        let points = max(0, rewardPoints)
-
-        let ok = appState.updateTaskTemplate(
-            id: template.id,
-            newTitle: trimmedTitle,
-            newIconSymbol: selectedEmoji.trimmed,
-            newRewardPoints: points
-        )
-
-        if ok {
-            dismiss()
-        } else {
-            validationMessage = "Couldn’t save changes. Try again."
-        }
+        // Fallback
+        return CKContainer.default().privateCloudDatabase
     }
 }

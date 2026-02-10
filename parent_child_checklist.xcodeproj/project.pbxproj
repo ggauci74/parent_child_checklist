@@ -29,9 +29,23 @@
 		ABC2A9322F30B0F0000BF5A3 /* parent_child_checklistUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = parent_child_checklistUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AB79488D2F3A7FAA0002CF89 /* Exceptions for "parent_child_checklist" folder in "parent_child_checklist" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				.gitattributes,
+				parent_child_checklist/.gitattributes,
+			);
+			target = ABC2A91A2F30B0F0000BF5A3 /* parent_child_checklist */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		ABC2A91D2F30B0F0000BF5A3 /* parent_child_checklist */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AB79488D2F3A7FAA0002CF89 /* Exceptions for "parent_child_checklist" folder in "parent_child_checklist" target */,
+			);
 			path = parent_child_checklist;
 			sourceTree = "<group>";
 		};
