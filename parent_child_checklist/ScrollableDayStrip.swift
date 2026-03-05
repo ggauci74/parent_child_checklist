@@ -178,7 +178,7 @@ struct ScrollableDayStrip: View {
         // Start scroll on next runloop so highlight has rendered on the tapped day
         DispatchQueue.main.async {
             withAnimation(.spring(response: scrollAnimResponse, dampingFraction: scrollAnimDamping)) {
-                // Programmatic centering via ScrollViewReader (standard approach) [1](https://stackoverflow.com/questions/64976866/scrollviewreaders-scrollto-does-not-scroll)[2](https://www.createwithswift.com/scroll-to-a-specific-item-using-a-scrollviewreader/)
+                // Programmatic centering via ScrollViewReader
                 proxy.scrollTo(target, anchor: .center)
             }
 
@@ -188,9 +188,7 @@ struct ScrollableDayStrip: View {
         }
     }
 
-    // MARK: - Swipe end snap:
-    // Option A: update selectedDate at end (no live update while dragging)
-    // Hard swipe: fade out and KEEP hidden afterwards (until user taps)
+    // MARK: - Swipe end snap (Option A: update selectedDate at end). Hard swipe: fade/hide highlight.
 
     private func snapToNearest(centerX: CGFloat, proxy: ScrollViewProxy, hardSwipe: Bool) {
         guard !itemMidX.isEmpty else { return }
@@ -222,8 +220,7 @@ struct ScrollableDayStrip: View {
                         selectedDate = target
                     }
 
-                    // ✅ Keep highlight hidden after hard swipe until user taps again
-                    // (highlightArmed was set to false in drag handler)
+                    // Keep highlight hidden after hard swipe until user taps again
                     highlightOpacity = 0.0
                 }
             }
@@ -238,7 +235,6 @@ struct ScrollableDayStrip: View {
                     selectedDate = target
                 }
 
-                // If highlight is not armed (rare here), keep hidden; otherwise show.
                 if highlightArmed {
                     withAnimation(.easeIn(duration: fadeInDuration)) {
                         highlightOpacity = 1.0
@@ -269,11 +265,14 @@ private struct DayCell: View {
     let highlightOpacity: Double
     let showHighlight: Bool
 
+    // Bright, cool white/blue for weekday labels
+    private let weekdayBright = Color(red: 0.88, green: 0.96, blue: 1.00)
+
     var body: some View {
         VStack(spacing: 6) {
             Text(weekdayText)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(weekdayBright.opacity(0.98))  // ⬅️ brighter weekday colour
 
             ZStack {
                 Circle()
@@ -283,7 +282,11 @@ private struct DayCell: View {
                 Text("\(dayNumber)")
                     .font(.headline)
                     .fontWeight(.semibold)
-                    .foregroundStyle((showHighlight && isSelected && highlightOpacity > 0.01) ? .white : .primary)
+                    .foregroundStyle(
+                        (showHighlight && isSelected && highlightOpacity > 0.01)
+                        ? .white                                  // selected day number
+                        : Color.white.opacity(0.95)               // ⬅️ unselected day number (bright)
+                    )
             }
             .frame(width: 34, height: 34)
         }

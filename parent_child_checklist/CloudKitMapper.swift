@@ -1,9 +1,10 @@
 //
-//  CloudKitMapper.swift
-//  parent_child_checklist
+// CloudKitMapper.swift
+// parent_child_checklist
 //
-//  Created by George Gauci on 10/2/2026.
+// Updated for Photo Evidence (Option A: single CKAsset)
 //
+
 import Foundation
 import CloudKit
 
@@ -53,6 +54,10 @@ extension CKRecord {
         self[key] as? [String]
     }
 
+    func asset(_ key: String) -> CKAsset? {
+        self[key] as? CKAsset
+    }
+
     // MARK: - Write helpers
 
     func set(_ key: String, _ value: String?) {
@@ -86,6 +91,10 @@ extension CKRecord {
     func setStringArray(_ key: String, _ value: [String]?) {
         self[key] = value as CKRecordValue?
     }
+
+    func setAsset(_ key: String, _ asset: CKAsset?) {
+        self[key] = asset
+    }
 }
 
 // MARK: - Record builders (stable IDs)
@@ -104,7 +113,9 @@ enum CKRecordFactory {
     }
 }
 
-// MARK: - ChildProfile mapper
+//
+// MARK: - CHILD PROFILE
+//
 
 enum ChildProfileMapper {
 
@@ -119,10 +130,8 @@ enum ChildProfileMapper {
     }
 
     static func fromRecord(_ r: CKRecord) -> ChildProfile? {
-        // Prefer stored id field; fallback to parsing recordName suffix if needed.
         let id = (r.uuid(CKSchema.ChildProfile.id))
             ?? UUID(uuidString: r.recordID.recordName.replacingOccurrences(of: "\(CKSchema.RecordType.childProfile)_", with: ""))
-
         guard let id,
               let name = r.string(CKSchema.ChildProfile.name),
               let colorHex = r.string(CKSchema.ChildProfile.colorHex)
@@ -133,7 +142,9 @@ enum ChildProfileMapper {
     }
 }
 
-// MARK: - TaskTemplate mapper
+//
+// MARK: - TASK TEMPLATE
+//
 
 enum TaskTemplateMapper {
 
@@ -159,13 +170,14 @@ enum TaskTemplateMapper {
     }
 }
 
-// MARK: - TaskAssignment mapper
+//
+// MARK: - TASK ASSIGNMENT
+//
 
 enum TaskAssignmentMapper {
 
     static func toRecord(_ model: TaskAssignment, zoneID: CKRecordZone.ID) -> CKRecord {
         let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.taskAssignment, uuid: model.id, zoneID: zoneID)
-
         r.set(CKSchema.TaskAssignment.id, model.id.uuidString)
         r.setUUID(CKSchema.TaskAssignment.childId, model.childId)
         r.setUUID(CKSchema.TaskAssignment.templateId, model.templateId)
@@ -173,8 +185,8 @@ enum TaskAssignmentMapper {
         r.set(CKSchema.TaskAssignment.taskTitle, model.taskTitle)
         r.set(CKSchema.TaskAssignment.taskIcon, model.taskIcon)
         r.set(CKSchema.TaskAssignment.rewardPoints, max(0, model.rewardPoints))
-        r.set(CKSchema.TaskAssignment.helper, model.helper)
 
+        r.set(CKSchema.TaskAssignment.helper, model.helper)
         r.set(CKSchema.TaskAssignment.subtractIfNotCompleted, model.subtractIfNotCompleted)
         r.set(CKSchema.TaskAssignment.alertMe, model.alertMe)
         r.set(CKSchema.TaskAssignment.photoEvidenceRequired, model.photoEvidenceRequired)
@@ -182,7 +194,6 @@ enum TaskAssignmentMapper {
 
         r.set(CKSchema.TaskAssignment.startDate, model.startDate)
         r.set(CKSchema.TaskAssignment.endDate, model.endDate)
-
         r.set(CKSchema.TaskAssignment.occurrence, model.occurrence.rawValue)
         r.setIntArray(CKSchema.TaskAssignment.weekdays, model.weekdays.sorted())
 
@@ -191,6 +202,14 @@ enum TaskAssignmentMapper {
         r.set(CKSchema.TaskAssignment.durationMinutes, model.durationMinutes)
 
         r.setUUID(CKSchema.TaskAssignment.linkedEventAssignmentId, model.linkedEventAssignmentId)
+
+        r.set(CKSchema.TaskAssignment.startNotifyEnabled, model.startNotifyEnabled)
+        r.set(CKSchema.TaskAssignment.startNotifyRecipient, model.startNotifyRecipient.rawValue)
+        r.set(CKSchema.TaskAssignment.startNotifyOffsetMinutes, model.startNotifyOffsetMinutes)
+
+        r.set(CKSchema.TaskAssignment.finishNotifyEnabled, model.finishNotifyEnabled)
+        r.set(CKSchema.TaskAssignment.finishNotifyRecipient, model.finishNotifyRecipient.rawValue)
+        r.set(CKSchema.TaskAssignment.finishNotifyOffsetMinutes, model.finishNotifyOffsetMinutes)
 
         r.set(CKSchema.TaskAssignment.createdAt, model.createdAt)
         r.set(CKSchema.TaskAssignment.updatedAt, model.updatedAt)
@@ -214,6 +233,16 @@ enum TaskAssignmentMapper {
         let createdAt = r.date(CKSchema.TaskAssignment.createdAt) ?? Date()
         let updatedAt = r.date(CKSchema.TaskAssignment.updatedAt) ?? createdAt
 
+        let startEnabled = r.bool(CKSchema.TaskAssignment.startNotifyEnabled) ?? false
+        let startRecipientRaw = r.string(CKSchema.TaskAssignment.startNotifyRecipient) ?? NotifyRecipient.both.rawValue
+        let startRecipient = NotifyRecipient(rawValue: startRecipientRaw) ?? .both
+        let startOffset = r.int(CKSchema.TaskAssignment.startNotifyOffsetMinutes)
+
+        let finishEnabled = r.bool(CKSchema.TaskAssignment.finishNotifyEnabled) ?? false
+        let finishRecipientRaw = r.string(CKSchema.TaskAssignment.finishNotifyRecipient) ?? NotifyRecipient.both.rawValue
+        let finishRecipient = NotifyRecipient(rawValue: finishRecipientRaw) ?? .both
+        let finishOffset = r.int(CKSchema.TaskAssignment.finishNotifyOffsetMinutes)
+
         return TaskAssignment(
             id: id,
             childId: childId,
@@ -234,44 +263,91 @@ enum TaskAssignmentMapper {
             finishTime: r.date(CKSchema.TaskAssignment.finishTime),
             durationMinutes: r.int(CKSchema.TaskAssignment.durationMinutes),
             linkedEventAssignmentId: r.uuid(CKSchema.TaskAssignment.linkedEventAssignmentId),
+            startNotifyEnabled: startEnabled,
+            startNotifyRecipient: startRecipient,
+            startNotifyOffsetMinutes: startOffset,
+            finishNotifyEnabled: finishEnabled,
+            finishNotifyRecipient: finishRecipient,
+            finishNotifyOffsetMinutes: finishOffset,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
     }
 }
 
-// MARK: - TaskCompletionRecord mapper
+//
+// MARK: - TASK COMPLETION RECORD (with Photo Evidence)
+//
 
 enum TaskCompletionRecordMapper {
 
+    // MARK: Write (Model → CKRecord)
     static func toRecord(_ model: TaskCompletionRecord, zoneID: CKRecordZone.ID) -> CKRecord {
-        let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.taskCompletion, uuid: model.id, zoneID: zoneID)
+
+        let r = CKRecordFactory.makeRecord(
+            type: CKSchema.RecordType.taskCompletion,
+            uuid: model.id,
+            zoneID: zoneID
+        )
+
         r.set(CKSchema.TaskCompletionRecord.id, model.id.uuidString)
         r.setUUID(CKSchema.TaskCompletionRecord.assignmentId, model.assignmentId)
         r.set(CKSchema.TaskCompletionRecord.day, model.day)
         r.set(CKSchema.TaskCompletionRecord.completedAt, model.completedAt)
+
+        // NEW: Photo evidence CKAsset
+        if let url = model.photoEvidenceLocalURL {
+            let asset = CKAsset(fileURL: url)
+            r.setAsset(CKSchema.TaskCompletionRecord.photoAsset, asset)
+        } else {
+            r.setAsset(CKSchema.TaskCompletionRecord.photoAsset, nil)
+        }
+
         return r
     }
 
+    // MARK: Read (CKRecord → Model)
     static func fromRecord(_ r: CKRecord) -> TaskCompletionRecord? {
+
         guard let id = r.uuid(CKSchema.TaskCompletionRecord.id),
               let assignmentId = r.uuid(CKSchema.TaskCompletionRecord.assignmentId),
               let day = r.date(CKSchema.TaskCompletionRecord.day)
         else { return nil }
 
+        let completedAt = r.date(CKSchema.TaskCompletionRecord.completedAt)
+
+        // NEW: Check for asset
+        var localURL: URL? = nil
+        if let asset = r.asset(CKSchema.TaskCompletionRecord.photoAsset) {
+            localURL = asset.fileURL
+        }
+
+        let hasPhoto = (localURL != nil)
+
         return TaskCompletionRecord(
             id: id,
             assignmentId: assignmentId,
             day: day,
-            completedAt: r.date(CKSchema.TaskCompletionRecord.completedAt)
+            completedAt: completedAt,
+            hasPhotoEvidence: hasPhoto,
+            photoEvidenceLocalURL: localURL,
+            photoThumbnailLocalURL: nil
         )
     }
 }
 
-// MARK: - LocationItem mapper
+//
+// MARK: - TASK COMPLETION LEGACY
+//
+
+// unchanged
+
+
+//
+// MARK: - LOCATION ITEM
+//
 
 enum LocationItemMapper {
-
     static func toRecord(_ model: LocationItem, zoneID: CKRecordZone.ID) -> CKRecord {
         let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.locationItem, uuid: model.id, zoneID: zoneID)
         r.set(CKSchema.LocationItem.id, model.id.uuidString)
@@ -288,12 +364,13 @@ enum LocationItemMapper {
 
         let createdAt = r.date(CKSchema.LocationItem.createdAt) ?? Date()
         let updatedAt = r.date(CKSchema.LocationItem.updatedAt) ?? createdAt
-
         return LocationItem(id: id, name: name, createdAt: createdAt, updatedAt: updatedAt)
     }
 }
 
-// MARK: - EventTemplate mapper
+//
+// MARK: - EVENT TEMPLATE
+//
 
 enum EventTemplateMapper {
 
@@ -320,13 +397,14 @@ enum EventTemplateMapper {
     }
 }
 
-// MARK: - EventAssignment mapper
+//
+// MARK: - EVENT ASSIGNMENT
+//
 
 enum EventAssignmentMapper {
 
     static func toRecord(_ model: EventAssignment, zoneID: CKRecordZone.ID) -> CKRecord {
         let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.eventAssignment, uuid: model.id, zoneID: zoneID)
-
         r.set(CKSchema.EventAssignment.id, model.id.uuidString)
         r.setUUID(CKSchema.EventAssignment.childId, model.childId)
         r.setUUID(CKSchema.EventAssignment.templateId, model.templateId)
@@ -334,12 +412,10 @@ enum EventAssignmentMapper {
         r.set(CKSchema.EventAssignment.eventTitle, model.eventTitle)
         r.set(CKSchema.EventAssignment.eventIcon, model.eventIcon)
         r.set(CKSchema.EventAssignment.helper, model.helper)
-
         r.set(CKSchema.EventAssignment.isActive, model.isActive)
 
         r.set(CKSchema.EventAssignment.startDate, model.startDate)
         r.set(CKSchema.EventAssignment.endDate, model.endDate)
-
         r.set(CKSchema.EventAssignment.occurrence, model.occurrence.rawValue)
         r.setIntArray(CKSchema.EventAssignment.weekdays, model.weekdays.sorted())
 
@@ -353,6 +429,14 @@ enum EventAssignmentMapper {
         r.set(CKSchema.EventAssignment.alertMe, model.alertMe)
         r.set(CKSchema.EventAssignment.alertOffsetMinutes, model.alertOffsetMinutes)
 
+        r.set(CKSchema.EventAssignment.startNotifyEnabled, model.startNotifyEnabled)
+        r.set(CKSchema.EventAssignment.startNotifyRecipient, model.startNotifyRecipient.rawValue)
+        r.set(CKSchema.EventAssignment.startNotifyOffsetMinutes, model.startNotifyOffsetMinutes)
+
+        r.set(CKSchema.EventAssignment.finishNotifyEnabled, model.finishNotifyEnabled)
+        r.set(CKSchema.EventAssignment.finishNotifyRecipient, model.finishNotifyRecipient.rawValue)
+        r.set(CKSchema.EventAssignment.finishNotifyOffsetMinutes, model.finishNotifyOffsetMinutes)
+
         r.set(CKSchema.EventAssignment.createdAt, model.createdAt)
         r.set(CKSchema.EventAssignment.updatedAt, model.updatedAt)
 
@@ -362,24 +446,38 @@ enum EventAssignmentMapper {
     static func fromRecord(_ r: CKRecord) -> EventAssignment? {
         guard let id = r.uuid(CKSchema.EventAssignment.id),
               let childId = r.uuid(CKSchema.EventAssignment.childId),
-              let eventTitle = r.string(CKSchema.EventAssignment.eventTitle),
-              let eventIcon = r.string(CKSchema.EventAssignment.eventIcon),
+              let title = r.string(CKSchema.EventAssignment.eventTitle),
+              let icon = r.string(CKSchema.EventAssignment.eventIcon),
               let startDate = r.date(CKSchema.EventAssignment.startDate)
         else { return nil }
 
-        let occurrenceRaw = r.string(CKSchema.EventAssignment.occurrence) ?? EventAssignment.Occurrence.specifiedDays.rawValue
+        let occurrenceRaw = r.string(CKSchema.EventAssignment.occurrence)
+            ?? EventAssignment.Occurrence.specifiedDays.rawValue
         let occurrence = EventAssignment.Occurrence(rawValue: occurrenceRaw) ?? .specifiedDays
+
         let weekdays = (r.intArray(CKSchema.EventAssignment.weekdays) ?? [0,1,2,3,4,5,6]).sorted()
 
         let createdAt = r.date(CKSchema.EventAssignment.createdAt) ?? Date()
         let updatedAt = r.date(CKSchema.EventAssignment.updatedAt) ?? createdAt
 
+        let startEnabled = r.bool(CKSchema.EventAssignment.startNotifyEnabled) ?? false
+        let startRecipientRaw = r.string(CKSchema.EventAssignment.startNotifyRecipient)
+            ?? NotifyRecipient.both.rawValue
+        let startRecipient = NotifyRecipient(rawValue: startRecipientRaw) ?? .both
+        let startOffset = r.int(CKSchema.EventAssignment.startNotifyOffsetMinutes)
+
+        let finishEnabled = r.bool(CKSchema.EventAssignment.finishNotifyEnabled) ?? false
+        let finishRecipientRaw = r.string(CKSchema.EventAssignment.finishNotifyRecipient)
+            ?? NotifyRecipient.both.rawValue
+        let finishRecipient = NotifyRecipient(rawValue: finishRecipientRaw) ?? .both
+        let finishOffset = r.int(CKSchema.EventAssignment.finishNotifyOffsetMinutes)
+
         return EventAssignment(
             id: id,
             childId: childId,
             templateId: r.uuid(CKSchema.EventAssignment.templateId),
-            eventTitle: eventTitle,
-            eventIcon: eventIcon,
+            eventTitle: title,
+            eventIcon: icon,
             helper: r.string(CKSchema.EventAssignment.helper),
             isActive: r.bool(CKSchema.EventAssignment.isActive) ?? true,
             startDate: startDate,
@@ -393,15 +491,24 @@ enum EventAssignmentMapper {
             locationNameSnapshot: r.string(CKSchema.EventAssignment.locationNameSnapshot) ?? "",
             alertMe: r.bool(CKSchema.EventAssignment.alertMe) ?? false,
             alertOffsetMinutes: r.int(CKSchema.EventAssignment.alertOffsetMinutes),
+            startNotifyEnabled: startEnabled,
+            startNotifyRecipient: startRecipient,
+            startNotifyOffsetMinutes: startOffset,
+            finishNotifyEnabled: finishEnabled,
+            finishNotifyRecipient: finishRecipient,
+            finishNotifyOffsetMinutes: finishOffset,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
     }
 }
 
-// MARK: - EmojiLibrary helper (customEmojis)
+//
+// MARK: - EMOJI LIBRARY (singleton)
+//
 
 enum EmojiLibraryMapper {
+
     static let singletonRecordName = "\(CKSchema.RecordType.emojiLibrary)_ROOT"
 
     static func toRecord(emojis: [String], zoneID: CKRecordZone.ID) -> CKRecord {

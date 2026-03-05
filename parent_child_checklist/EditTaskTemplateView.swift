@@ -1,8 +1,8 @@
 //
-//  EditTaskTemplateView.swift
-//  parent_child_checklist
+// EditTaskTemplateView.swift
+// parent_child_checklist
 //
-//  Created by George Gauci on 10/2/2026.
+// Created by George Gauci on 10/2/2026.
 //
 
 import SwiftUI
@@ -14,21 +14,30 @@ struct EditTaskTemplateView: View {
 
     let template: TaskTemplate
 
+    // ✅ NEW: Callbacks so the presenting view (e.g., SelectTaskTemplateView) can react
+    var onSaved: ((TaskTemplate) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
+
     @State private var title: String
-    @State private var searchText: String = ""
     @State private var selectedEmoji: String
     @State private var selectedCategory: EmojiCatalog.Category = .all
     @State private var validationMessage: String? = nil
     @FocusState private var titleFocused: Bool
-    @State private var showMyEmojisSheet = false
 
-    // ✅ NEW: Reward points
+    // ✅ Reward points
     @State private var rewardPoints: Int
+
+    @State private var showMyEmojisSheet = false
 
     private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
 
-    init(template: TaskTemplate) {
+    /// Keep the original convenience while allowing callbacks.
+    init(template: TaskTemplate,
+         onSaved: ((TaskTemplate) -> Void)? = nil,
+         onCancel: (() -> Void)? = nil) {
         self.template = template
+        self.onSaved = onSaved
+        self.onCancel = onCancel
         _title = State(initialValue: template.title)
         _selectedEmoji = State(initialValue: template.iconSymbol)
         _rewardPoints = State(initialValue: max(0, template.rewardPoints))
@@ -41,9 +50,9 @@ struct EditTaskTemplateView: View {
     }
 
     private var hasChanges: Bool {
-        trimmedTitle != template.title.trimmed ||
-        selectedEmoji != template.iconSymbol ||
-        rewardPoints != max(0, template.rewardPoints)
+        trimmedTitle != template.title.trimmed
+        || selectedEmoji != template.iconSymbol
+        || rewardPoints != max(0, template.rewardPoints)
     }
 
     private var canSave: Bool {
@@ -57,12 +66,6 @@ struct EditTaskTemplateView: View {
         case .all, .morning, .hygiene, .school, .chores, .food, .pets, .sports, .time, .rewards, .health, .outdoors:
             return EmojiCatalog.emojis(for: selectedCategory)
         }
-    }
-
-    private var filteredEmojis: [String] {
-        let q = searchText.trimmed
-        if q.isEmpty { return baseEmojis }
-        return baseEmojis.filter { $0.contains(q) }
     }
 
     var body: some View {
@@ -85,12 +88,11 @@ struct EditTaskTemplateView: View {
                     }
                 }
 
-                // ✅ NEW: Reward Points UI
+                // ✅ Reward Points UI
                 Section("Reward Points") {
                     HStack {
                         Text("💎 Points")
                         Spacer()
-
                         Button {
                             rewardPoints = max(0, rewardPoints - 1)
                         } label: {
@@ -115,7 +117,7 @@ struct EditTaskTemplateView: View {
                         .accessibilityLabel("Increase reward points")
                     }
                 }
-                
+
                 Section("Icon (Emoji)") {
                     HStack {
                         Text("Selected")
@@ -130,13 +132,10 @@ struct EditTaskTemplateView: View {
                         }
                     }
 
-                    TextField("Search", text: $searchText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-
+                    // Grid of emojis (no search box)
                     ScrollView {
                         LazyVGrid(columns: gridColumns, spacing: 10) {
-                            ForEach(filteredEmojis, id: \.self) { emoji in
+                            ForEach(baseEmojis, id: \.self) { emoji in
                                 Button {
                                     selectedEmoji = emoji
                                     validationMessage = nil
@@ -175,7 +174,10 @@ struct EditTaskTemplateView: View {
             .navigationTitle("Edit Task")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        onCancel?()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
@@ -206,7 +208,6 @@ struct EditTaskTemplateView: View {
                 CustomEmojiLibraryView { picked in
                     selectedEmoji = picked
                     selectedCategory = .myEmojis
-                    searchText = ""
                 }
                 .environmentObject(appState)
             }
@@ -216,9 +217,6 @@ struct EditTaskTemplateView: View {
                 }
             }
             .onChange(of: title) { _, _ in validationMessage = nil }
-            .onChange(of: selectedCategory) { _, _ in
-                searchText = ""
-            }
         }
     }
 
@@ -229,19 +227,16 @@ struct EditTaskTemplateView: View {
             validationMessage = "Task title cannot be empty."
             return
         }
-
         guard !isDuplicate else {
             validationMessage = "That task already exists. Please choose a different name."
             return
         }
-
         guard selectedEmoji.trimmed.containsEmoji else {
             validationMessage = "Please select an emoji."
             return
         }
 
         let points = max(0, rewardPoints)
-
         let ok = appState.updateTaskTemplate(
             id: template.id,
             newTitle: trimmedTitle,
@@ -250,6 +245,10 @@ struct EditTaskTemplateView: View {
         )
 
         if ok {
+            // Try to fetch the updated template from AppState to pass back
+            if let updated = appState.taskTemplates.first(where: { $0.id == template.id }) {
+                onSaved?(updated)
+            }
             dismiss()
         } else {
             validationMessage = "Couldn’t save changes. Try again."

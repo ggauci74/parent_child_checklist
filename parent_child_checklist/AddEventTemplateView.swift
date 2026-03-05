@@ -9,8 +9,11 @@ struct AddEventTemplateView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
+    // NEW: Callbacks so the presenting view (e.g., SelectEventTemplateView) can react
+    var onSaved: ((EventTemplate) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
+
     @State private var title: String = ""
-    @State private var searchText: String = ""
     @State private var selectedEmoji: String? = nil
     @State private var selectedCategory: EmojiCatalog.Category = .all
     @State private var validationMessage: String? = nil
@@ -37,12 +40,6 @@ struct AddEventTemplateView: View {
         default:
             return EmojiCatalog.emojis(for: selectedCategory)
         }
-    }
-
-    private var filteredEmojis: [String] {
-        let q = searchText.trimmed
-        if q.isEmpty { return baseEmojis }
-        return baseEmojis.filter { $0.contains(q) }
     }
 
     var body: some View {
@@ -82,13 +79,10 @@ struct AddEventTemplateView: View {
                         }
                     }
 
-                    TextField("Search", text: $searchText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-
+                    // Grid (no text search)
                     ScrollView {
                         LazyVGrid(columns: gridColumns, spacing: 10) {
-                            ForEach(filteredEmojis, id: \.self) { emoji in
+                            ForEach(baseEmojis, id: \.self) { emoji in
                                 Button {
                                     selectedEmoji = emoji
                                     validationMessage = nil
@@ -127,7 +121,10 @@ struct AddEventTemplateView: View {
             .navigationTitle("Add Event")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        onCancel?()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
@@ -158,7 +155,6 @@ struct AddEventTemplateView: View {
                 CustomEmojiLibraryView { picked in
                     selectedEmoji = picked
                     selectedCategory = .myEmojis
-                    searchText = ""
                 }
                 .environmentObject(appState)
             }
@@ -168,13 +164,11 @@ struct AddEventTemplateView: View {
                 }
             }
             .onChange(of: title) { _, _ in validationMessage = nil }
-            .onChange(of: selectedCategory) { _, _ in searchText = "" }
         }
     }
 
     private func save() {
         validationMessage = nil
-
         guard !trimmedTitle.isEmpty else {
             validationMessage = "Please enter an event title."
             return
@@ -188,7 +182,12 @@ struct AddEventTemplateView: View {
             return
         }
 
-        _ = appState.createEventTemplate(title: trimmedTitle, iconSymbol: emoji)
-        dismiss()
+        // Capture the created template and pass it back via onSaved
+        if let created = appState.createEventTemplate(title: trimmedTitle, iconSymbol: emoji) {
+            onSaved?(created)
+            dismiss()
+        } else {
+            validationMessage = "Couldn’t create event. Please try again."
+        }
     }
 }

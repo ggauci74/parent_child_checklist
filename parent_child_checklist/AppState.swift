@@ -1,9 +1,10 @@
 //
-//  AppState.swift
-//  parent_child_checklist
+// AppState.swift
+// parent_child_checklist
 //
 
 import SwiftUI
+import UIKit
 import Combine
 import Foundation
 import CloudKit
@@ -14,32 +15,27 @@ final class AppState: ObservableObject {
     // MARK: - Published State (UI Source of Truth)
     @Published var children: [ChildProfile] = []
     @Published var tasks: [TaskItem] = [] // legacy / placeholder
-
     // Parent-created task library
     @Published var taskTemplates: [TaskTemplate] = []
-
     // Task assignments + completions
     @Published var taskAssignments: [TaskAssignment] = []
     @Published var taskCompletions: [TaskCompletionRecord] = []
-
     // Shared emoji library
     @Published var customEmojis: [String] = []
-
     // Event library (templates)
     @Published var eventTemplates: [EventTemplate] = []
-
     // Event assignments (per child)
     @Published var eventAssignments: [EventAssignment] = []
-
     // Locations (used by event assignments)
     @Published var locations: [LocationItem] = []
+    // Append-only points ledger
+    @Published var pointsLedger: [PointsEntry] = []
+    // Requests
+    @Published var rewardRequests: [RewardRequest] = []
 
     // MARK: - CloudKit status (read-only phase)
-    /// Whether we successfully loaded non-empty user data from CloudKit on this launch.
     @Published private(set) var cloudKitLoaded: Bool = false
-    /// If bootstrap failed, any error message here (for logging/diagnostics UI if desired).
     @Published private(set) var cloudKitErrorMessage: String? = nil
-    /// The resolved family context (shared vs. private owner, zone & FamilyMeta recordID).
     @Published private(set) var familyContext: FamilyCoordinator.FamilyContext? = nil
 
     private var cancellables = Set<AnyCancellable>()
@@ -53,16 +49,19 @@ final class AppState: ObservableObject {
     private let eventTemplatesFileName = "eventTemplates.json"
     private let eventAssignmentsFileName = "eventAssignments.json"
     private let locationsFileName = "locations.json"
+    private let pointsLedgerFileName = "pointsLedger.json"
+    private let rewardRequestsFileName = "rewardRequests.json"
 
-    // MARK: - CloudKit (read-only integration for now)
-    /// Family data loader (bootstraps family & loads records); JSON remains as cache.
-    private let familyStore = FamilyDataStore(containerIdentifier: nil)
+    // MARK: - CloudKit integration
+    private let familyStore = FamilyDataStore(containerIdentifier: nil) // read-only snapshot loader
+    private let shareCoordinator = FamilyCoordinator(ck: CloudKitService(config: .init(containerIdentifier: nil)))
+    private let ck = CloudKitService(config: .init(containerIdentifier: nil)) // used for immediate writes (photo assets)
 
-    /// A lightweight coordinator we reuse to fetch the current FamilyContext
-    /// (zone, database kind, FamilyMeta recordID) for future sharing UI.
-    private let shareCoordinator = FamilyCoordinator(
-        ck: CloudKitService(config: .init(containerIdentifier: nil))
-    )
+    // MARK: - Rolling window config
+    /// Keep only the latest N days of detailed ledger, snapshot older entries.
+    private let ledgerKeepDays: Int = 90
+    /// Expose in case views want to align their cutoffs
+    var ledgerWindowDays: Int { ledgerKeepDays }
 
     // MARK: - Init
     init() {
@@ -75,18 +74,20 @@ final class AppState: ObservableObject {
         loadEventTemplates()
         loadEventAssignments()
         loadLocations()
+        loadPointsLedger()
+        loadRewardRequests()
 
         if children.isEmpty {
             seedSampleData()
         }
 
-        // Debounced autosave to JSON (we'll add CloudKit writes later)
         setupAutoSave()
 
         // CloudKit bootstrap (read-only): load family if CloudKit already has user data
-        Task {
-            await bootstrapFromCloudKit()
-        }
+        Task { await bootstrapFromCloudKit() }
+
+        // 🔹 Apply rolling-window compaction on app start
+        compactLedgerRollingWindow()
     }
 
     func seedSampleData() { }
@@ -97,6 +98,7 @@ final class AppState: ObservableObject {
         cal.timeZone = .current
         return cal
     }
+    private func dayOnly(_ date: Date) -> Date { isoCalendar.startOfDay(for: date) }
 
     // MARK: - Name normalization
     private func normalizedName(_ input: String) -> String {
@@ -115,7 +117,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Task template uniqueness
+    // MARK: - Task / Event template uniqueness
     func isTaskTitleTaken(_ title: String, excluding templateId: UUID? = nil) -> Bool {
         let target = normalizedName(title)
         guard !target.isEmpty else { return false }
@@ -124,8 +126,6 @@ final class AppState: ObservableObject {
             return normalizedName(tpl.title) == target
         }
     }
-
-    // MARK: - Event template uniqueness
     func isEventTitleTaken(_ title: String, excluding templateId: UUID? = nil) -> Bool {
         let target = normalizedName(title)
         guard !target.isEmpty else { return false }
@@ -160,7 +160,6 @@ final class AppState: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard !isNameTaken(trimmed) else { return nil }
-
         let child = ChildProfile(name: trimmed, colorHex: colorHex, avatarId: nil)
         children.append(child)
         return child
@@ -169,13 +168,13 @@ final class AppState: ObservableObject {
     func deleteChild(id: UUID) {
         children.removeAll { $0.id == id }
         tasks.removeAll { $0.childId == id }
-
         let assignmentIds = taskAssignments.filter { $0.childId == id }.map(\.id)
         taskAssignments.removeAll { $0.childId == id }
         taskCompletions.removeAll { assignmentIds.contains($0.assignmentId) }
-
-        // remove event assignments for that child
         eventAssignments.removeAll { $0.childId == id }
+        // Keep points ledger for audit (but remove per-child entries for deleted child)
+        pointsLedger.removeAll { $0.childId == id }
+        rewardRequests.removeAll { $0.childId == id }
     }
 
     @discardableResult
@@ -194,10 +193,8 @@ final class AppState: ObservableObject {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return nil }
         guard !isTaskTitleTaken(trimmedTitle) else { return nil }
-
         let trimmedIcon = iconSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedIcon.isEmpty else { return nil }
-
         let points = max(0, rewardPoints)
         let tpl = TaskTemplate(title: trimmedTitle, iconSymbol: trimmedIcon, rewardPoints: points)
         taskTemplates.append(tpl)
@@ -209,10 +206,8 @@ final class AppState: ObservableObject {
         let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return false }
         guard !isTaskTitleTaken(trimmedTitle, excluding: id) else { return false }
-
         let trimmedIcon = newIconSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedIcon.isEmpty else { return false }
-
         guard let idx = taskTemplates.firstIndex(where: { $0.id == id }) else { return false }
         taskTemplates[idx].title = trimmedTitle
         taskTemplates[idx].iconSymbol = trimmedIcon
@@ -237,10 +232,8 @@ final class AppState: ObservableObject {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return nil }
         guard !isEventTitleTaken(trimmedTitle) else { return nil }
-
         let trimmedIcon = iconSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedIcon.isEmpty else { return nil }
-
         let tpl = EventTemplate(title: trimmedTitle, iconSymbol: trimmedIcon, createdAt: Date(), updatedAt: Date())
         eventTemplates.append(tpl)
         return tpl
@@ -251,10 +244,8 @@ final class AppState: ObservableObject {
         let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return false }
         guard !isEventTitleTaken(trimmedTitle, excluding: id) else { return false }
-
         let trimmedIcon = newIconSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedIcon.isEmpty else { return false }
-
         guard let idx = eventTemplates.firstIndex(where: { $0.id == id }) else { return false }
         eventTemplates[idx].title = trimmedTitle
         eventTemplates[idx].iconSymbol = trimmedIcon
@@ -270,7 +261,6 @@ final class AppState: ObservableObject {
     func isAvatarTaken(_ avatarId: String, excluding childId: UUID? = nil) -> Bool {
         let t = avatarId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
-
         return children.contains { child in
             if let childId, child.id == childId { return false }
             return child.avatarId == t
@@ -280,11 +270,9 @@ final class AppState: ObservableObject {
     @discardableResult
     func updateChildAvatar(childId: UUID, newAvatarId: String?) -> Bool {
         guard let idx = children.firstIndex(where: { $0.id == childId }) else { return false }
-
         // Allow clearing avatar (nil => "Not chosen yet")
         let trimmed = newAvatarId?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty {
-            // Enforce uniqueness across other children
             guard !isAvatarTaken(trimmed, excluding: childId) else { return false }
             children[idx].avatarId = trimmed
         } else {
@@ -305,7 +293,6 @@ final class AppState: ObservableObject {
         let t = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
         guard !isCustomEmojiTaken(t) else { return false }
-
         customEmojis.append(t)
         // De-duplicate while preserving order
         var seen = Set<String>()
@@ -328,23 +315,19 @@ final class AppState: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard !isLocationNameTaken(trimmed) else { return nil }
-
         let loc = LocationItem(name: trimmed, createdAt: Date(), updatedAt: Date())
         locations.append(loc)
         return loc
     }
 
-    /// Renaming updates all event assignments that reference this locationId
     @discardableResult
     func renameLocation(id: UUID, newName: String) -> Bool {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         guard !isLocationNameTaken(trimmed, excluding: id) else { return false }
         guard let idx = locations.firstIndex(where: { $0.id == id }) else { return false }
-
         locations[idx].name = trimmed
         locations[idx].updatedAt = Date()
-
         for i in eventAssignments.indices {
             if eventAssignments[i].locationId == id {
                 eventAssignments[i].locationNameSnapshot = trimmed
@@ -354,13 +337,11 @@ final class AppState: ObservableObject {
         return true
     }
 
-    /// Delete allowed: unlink id but keep snapshot on existing assignments
     func deleteLocation(id: UUID) {
         locations.removeAll { $0.id == id }
         for i in eventAssignments.indices {
             if eventAssignments[i].locationId == id {
                 eventAssignments[i].locationId = nil
-                // keep snapshot
                 eventAssignments[i].updatedAt = Date()
             }
         }
@@ -376,11 +357,9 @@ final class AppState: ObservableObject {
     @discardableResult
     func updateEventAssignment(_ updated: EventAssignment) -> Bool {
         guard let idx = eventAssignments.firstIndex(where: { $0.id == updated.id }) else { return false }
-
-        // 1) Update the event assignment
         eventAssignments[idx] = updated
 
-        // 2) STRICT MODE: resync schedule of all tasks linked to this event assignment
+        // STRICT MODE: resync schedule of all tasks linked to this event assignment
         for i in taskAssignments.indices {
             guard taskAssignments[i].linkedEventAssignmentId == updated.id else { continue }
             var t = taskAssignments[i]
@@ -391,79 +370,41 @@ final class AppState: ObservableObject {
         return true
     }
 
-    /// Applies the "linked schedule" rules to a task based on a linked event.
-    /// Defaults:
-    /// - occurrence matches event occurrence
-    /// - weekdays match for specifiedDays
-    /// - startDate cannot be earlier than event.startDate
-    /// - if event has endDate, task must have an endDate and cannot exceed it
     private func applyLinkedEventSchedule(to task: inout TaskAssignment, event: EventAssignment) {
-        // If event is inactive, we shouldn't keep a link (picker prevents linking, but this covers edits)
         if !event.isActive {
             task.linkedEventAssignmentId = nil
             return
         }
-
-        // Map event occurrence -> task occurrence
-        switch event.occurrence {
-        case .onceOnly:
-            task.occurrence = .onceOnly
-            task.weekdays = [] // not used for onceOnly
-            // Once-only means it occurs on the event's start date
-            task.startDate = event.startDate
-            task.endDate = nil
-
-        case .specifiedDays:
-            task.occurrence = .specifiedDays
-            task.weekdays = event.weekdays.sorted()
-
-            // Clamp task start date >= event start date
-            if task.startDate < event.startDate {
-                task.startDate = event.startDate
-            }
-
-            // Handle end date constraint
-            if let eventEnd = event.endDate {
-                // Task must have an end date if the event has one, and cannot exceed it
-                if let taskEnd = task.endDate {
-                    task.endDate = min(taskEnd, eventEnd)
-                } else {
-                    task.endDate = eventEnd
-                }
-
-                // Safety: ensure endDate isn't before startDate
-                if let taskEnd = task.endDate, taskEnd < task.startDate {
-                    task.endDate = task.startDate
-                }
-            } else {
-                // Event has no end date: task end date can remain as-is (nil allowed)
-                if let taskEnd = task.endDate, taskEnd < task.startDate {
-                    task.endDate = task.startDate
-                }
-            }
-        }
-    }
-
-    /// STRICT MODE:
-    /// If a task is linked to an event assignment, the task's schedule must exactly match the event's schedule:
-    /// - occurrence matches
-    /// - weekdays match (for specifiedDays)
-    /// - startDate matches exactly
-    /// - endDate matches exactly (including nil)
-    private func applyStrictLinkedEventSchedule(to task: inout TaskAssignment, event: EventAssignment) {
-        // If event is inactive, unlink defensively (picker prevents linking but event can be edited)
-        if !event.isActive {
-            task.linkedEventAssignmentId = nil
-            return
-        }
-
         switch event.occurrence {
         case .onceOnly:
             task.occurrence = .onceOnly
             task.weekdays = []
             task.startDate = event.startDate
             task.endDate = nil
+        case .specifiedDays:
+            task.occurrence = .specifiedDays
+            task.weekdays = event.weekdays.sorted()
+            if task.startDate < event.startDate { task.startDate = event.startDate }
+            if let eventEnd = event.endDate {
+                if let taskEnd = task.endDate { task.endDate = min(taskEnd, eventEnd) } else { task.endDate = eventEnd }
+                if let taskEnd = task.endDate, taskEnd < task.startDate { task.endDate = task.startDate }
+            } else if let taskEnd = task.endDate, taskEnd < task.startDate {
+                task.endDate = task.startDate
+            }
+        }
+    }
 
+    private func applyStrictLinkedEventSchedule(to task: inout TaskAssignment, event: EventAssignment) {
+        if !event.isActive {
+            task.linkedEventAssignmentId = nil
+            return
+        }
+        switch event.occurrence {
+        case .onceOnly:
+            task.occurrence = .onceOnly
+            task.weekdays = []
+            task.startDate = event.startDate
+            task.endDate = nil
         case .specifiedDays:
             task.occurrence = .specifiedDays
             task.weekdays = event.weekdays.sorted()
@@ -473,22 +414,15 @@ final class AppState: ObservableObject {
     }
 
     func deleteEventAssignment(id: UUID) {
-        // 1) Find all tasks linked to this event assignment (Option A: dependent)
         let linkedTaskIds = taskAssignments
             .filter { $0.linkedEventAssignmentId == id }
             .map(\.id)
-
-        // 2) Remove those task assignments
         taskAssignments.removeAll { $0.linkedEventAssignmentId == id }
-
-        // 3) Remove any task completion records for the removed tasks
         taskCompletions.removeAll { linkedTaskIds.contains($0.assignmentId) }
-
-        // 4) Finally remove the event assignment itself
         eventAssignments.removeAll { $0.id == id }
     }
 
-    // MARK: - Task Assignment CRUD
+    // MARK: - Task Assignment CRUD (basic)
     @discardableResult
     func createTaskAssignment(_ assignment: TaskAssignment) -> TaskAssignment {
         taskAssignments.append(assignment)
@@ -508,8 +442,6 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - Date helpers
-    private func dayOnly(_ date: Date) -> Date { isoCalendar.startOfDay(for: date) }
-
     private func weekdayIndexMondayFirst(for date: Date) -> Int {
         let weekday = isoCalendar.component(.weekday, from: date)
         switch weekday {
@@ -566,41 +498,394 @@ final class AppState: ObservableObject {
                 }
             }
             .sorted { a, b in
-                // Active first
                 if a.isActive != b.isActive { return a.isActive && !b.isActive }
-                // Then by start time (nil last)
                 switch (a.startTime, b.startTime) {
-                case (nil, nil):
-                    break
-                case (nil, _?):
-                    return false
-                case (_?, nil):
-                    return true
-                case (let ta?, let tb?):
-                    if ta != tb { return ta < tb }
+                case (nil, nil): break
+                case (nil, _?): return false
+                case (_?, nil): return true
+                case (let ta?, let tb?): if ta != tb { return ta < tb }
                 }
-                // Then title
                 return a.eventTitle.localizedCaseInsensitiveCompare(b.eventTitle) == .orderedAscending
             }
     }
 
-    // MARK: - Completion Helpers (tasks only)
+    // MARK: - Completion Helpers + Points awarding
+
     func completionRecord(for assignmentId: UUID, on date: Date) -> TaskCompletionRecord? {
         let d = dayOnly(date)
-        return taskCompletions.first(where: { $0.assignmentId == assignmentId && dayOnly($0.day) == d })
+        return taskCompletions.first { $0.assignmentId == assignmentId && dayOnly($0.day) == d }
     }
 
     func isCompleted(assignmentId: UUID, on date: Date) -> Bool {
         completionRecord(for: assignmentId, on: date) != nil
     }
 
+    /// Standard toggle flow (no photo evidence path). If a completion exists → un-complete; else → complete.
     func toggleCompletion(assignmentId: UUID, on date: Date) {
         let d = dayOnly(date)
+
         if let idx = taskCompletions.firstIndex(where: { $0.assignmentId == assignmentId && dayOnly($0.day) == d }) {
+            // UN-COMPLETE
+            let rec = taskCompletions[idx]
+
+            // 1) Remove locally
             taskCompletions.remove(at: idx)
+
+            // 2) Remove in CloudKit (best effort)
+            Task { await deleteCompletionFromCloudKit(rec) }
+
+            // 3) Cleanup local photo file
+            if let url = rec.photoEvidenceLocalURL {
+                try? FileManager.default.removeItem(at: url)
+            }
+
+            // 4) Reverse points
+            if let assignment = taskAssignments.first(where: { $0.id == assignmentId }) {
+                let points = max(0, assignment.rewardPoints)
+                guard points > 0 else { return }
+                appendPointsEntry(childId: assignment.childId,
+                                  assignmentId: assignmentId,
+                                  day: d,
+                                  delta: -points,
+                                  reason: .completed)
+            }
         } else {
-            let rec = TaskCompletionRecord(assignmentId: assignmentId, day: d, completedAt: nil)
+            // COMPLETE (no photo evident path—this call is used by non-photo tasks)
+            let rec = TaskCompletionRecord(assignmentId: assignmentId, day: d, completedAt: Date(), hasPhotoEvidence: false)
             taskCompletions.append(rec)
+
+            // (Optional) Save to CloudKit without asset (pure completion row)
+            Task { await uploadCompletionToCloudKit(rec) }
+
+            // Points
+            if let assignment = taskAssignments.first(where: { $0.id == assignmentId }) {
+                let points = max(0, assignment.rewardPoints)
+                guard points > 0 else { return }
+                appendPointsEntry(childId: assignment.childId,
+                                  assignmentId: assignmentId,
+                                  day: d,
+                                  delta: points,
+                                  reason: .completed)
+            }
+        }
+    }
+
+    /// NEW: Complete a task with required photo evidence (Option A: immediate CloudKit upload).
+    func completeTaskWithPhoto(assignmentId: UUID, on date: Date, image: UIImage) {
+        let d = dayOnly(date)
+
+        // If already completed for the day, do nothing (or could replace photo in a future iteration)
+        guard completionRecord(for: assignmentId, on: d) == nil else { return }
+
+        // 1) Save image to a local Evidence folder (JPEG)
+        guard let fileURL = savePhotoEvidenceToDisk(image) else {
+            // If saving failed, we can still complete without photo to avoid blocking the child.
+            let fallback = TaskCompletionRecord(assignmentId: assignmentId, day: d, completedAt: Date(), hasPhotoEvidence: false)
+            taskCompletions.append(fallback)
+            Task { await uploadCompletionToCloudKit(fallback) }
+            awardPointsForCompletion(assignmentId: assignmentId, on: d)
+            return
+        }
+
+        // 2) Create completion record marked with photo
+        let rec = TaskCompletionRecord(
+            assignmentId: assignmentId,
+            day: d,
+            completedAt: Date(),
+            hasPhotoEvidence: true,
+            photoEvidenceLocalURL: fileURL
+        )
+        taskCompletions.append(rec)
+
+        // 3) Upload to CloudKit (record + CKAsset)
+        Task { await uploadCompletionToCloudKit(rec) }
+
+        // 4) Award points
+        awardPointsForCompletion(assignmentId: assignmentId, on: d)
+    }
+
+    private func awardPointsForCompletion(assignmentId: UUID, on day: Date) {
+        if let assignment = taskAssignments.first(where: { $0.id == assignmentId }) {
+            let points = max(0, assignment.rewardPoints)
+            guard points > 0 else { return }
+            appendPointsEntry(childId: assignment.childId,
+                              assignmentId: assignmentId,
+                              day: dayOnly(day),
+                              delta: points,
+                              reason: .completed)
+        }
+    }
+
+    // MARK: - CloudKit Upload/Delete for Completion
+
+    private func uploadCompletionToCloudKit(_ rec: TaskCompletionRecord) async {
+        guard let ctx = familyContext else { return } // if not available yet, skip (local JSON still holds it)
+        let zoneID = ctx.zoneID
+        let record = TaskCompletionRecordMapper.toRecord(rec, zoneID: zoneID)
+        do {
+            _ = try await ck.save(record, to: ctx.database)
+        } catch {
+            // best-effort: keep local; CloudKit may sync later after next bootstrap in future enhancement
+            print("⚠️ uploadCompletionToCloudKit failed: \(error)")
+        }
+    }
+
+    private func deleteCompletionFromCloudKit(_ rec: TaskCompletionRecord) async {
+        guard let ctx = familyContext else { return }
+        let recordID = CKID.recordID(type: CKSchema.RecordType.taskCompletion, uuid: rec.id, zoneID: ctx.zoneID)
+        do {
+            try await ck.delete(recordID: recordID, from: ctx.database)
+        } catch {
+            // best-effort
+            print("⚠️ deleteCompletionFromCloudKit failed: \(error)")
+        }
+    }
+
+    // MARK: - Photo Evidence Disk Helpers
+
+    private func evidenceFolderURL() -> URL {
+        let folder = appFolderURL().appendingPathComponent("Evidence", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: folder.path) {
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        return folder
+    }
+
+    /// Saves `UIImage` to Evidence folder as a JPEG (quality 0.85). Returns file URL if successful.
+    private func savePhotoEvidenceToDisk(_ image: UIImage) -> URL? {
+        // Prefer JPEG to balance size/quality. Fall back to PNG if JPEG fails.
+        let filename = UUID().uuidString + ".jpg"
+        let url = evidenceFolderURL().appendingPathComponent(filename)
+
+        let jpegQuality: CGFloat = 0.85
+        if let data = image.jpegData(compressionQuality: jpegQuality) {
+            do {
+                try data.write(to: url, options: [.atomic])
+                return url
+            } catch {
+                print("❌ Failed to write JPEG: \(error)")
+            }
+        }
+
+        // Fallback PNG
+        if let data = image.pngData() {
+            do {
+                try data.write(to: url, options: [.atomic])
+                return url
+            } catch {
+                print("❌ Failed to write PNG: \(error)")
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Points & Ledger
+
+    private func appendPointsEntry(childId: UUID, assignmentId: UUID?, day: Date, delta: Int, reason: PointsReason) {
+        let entry = PointsEntry(
+            childId: childId,
+            assignmentId: assignmentId,
+            day: dayOnly(day),
+            delta: delta,
+            reason: reason,
+            createdAt: Date()
+        )
+        pointsLedger.append(entry)
+    }
+
+    func childPointsTotal(childId: UUID) -> Int {
+        pointsLedger
+            .filter { $0.childId == childId }
+            .reduce(0) { $0 + $1.delta }
+    }
+
+    // MARK: - Reward Requests
+
+    /// Create a new pending request from child
+    @discardableResult
+    func createRewardRequest(childId: UUID, title: String) -> RewardRequest? {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return nil }
+        let now = Date()
+        let req = RewardRequest(
+            childId: childId,
+            title: t,
+            status: .pending,
+            approvedCost: nil,
+            requestedAt: now,
+            approvedAt: nil,
+            notApprovedAt: nil,
+            claimedAt: nil,
+            updatedAt: now
+        )
+        rewardRequests.insert(req, at: 0) // newest first
+        return req
+    }
+
+    /// Child can edit title only when pending
+    @discardableResult
+    func updateRewardRequestTitle(id: UUID, newTitle: String) -> Bool {
+        let t = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return false }
+        guard let idx = rewardRequests.firstIndex(where: { $0.id == id }) else { return false }
+        guard rewardRequests[idx].status == .pending else { return false }
+        rewardRequests[idx].title = t
+        rewardRequests[idx].updatedAt = Date()
+        return true
+    }
+
+    /// Child or parent can delete any request at any time (no refunds if already claimed)
+    @discardableResult
+    func deleteRewardRequest(id: UUID) -> Bool {
+        if let idx = rewardRequests.firstIndex(where: { $0.id == id }) {
+            rewardRequests.remove(at: idx)
+            return true
+        }
+        return false
+    }
+
+    /// Parent: approve with a gem cost; can also refine the title before approving
+    @discardableResult
+    func approveRewardRequest(id: UUID, cost: Int, newTitle: String?) -> Bool {
+        guard let idx = rewardRequests.firstIndex(where: { $0.id == id }) else { return false }
+        guard rewardRequests[idx].status == .pending else { return false }
+        let now = Date()
+        let c = max(0, cost)
+        rewardRequests[idx].approvedCost = c
+        if let t = newTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+            rewardRequests[idx].title = t
+        }
+        rewardRequests[idx].status = .approved
+        rewardRequests[idx].approvedAt = now
+        rewardRequests[idx].notApprovedAt = nil
+        rewardRequests[idx].updatedAt = now
+        return true
+    }
+
+    /// Parent: not approved ("Not this time")
+    @discardableResult
+    func notApproveRewardRequest(id: UUID) -> Bool {
+        guard let idx = rewardRequests.firstIndex(where: { $0.id == id }) else { return false }
+        guard rewardRequests[idx].status == .pending else { return false }
+        let now = Date()
+        rewardRequests[idx].approvedCost = nil
+        rewardRequests[idx].status = .notApproved
+        rewardRequests[idx].notApprovedAt = now
+        rewardRequests[idx].approvedAt = nil
+        rewardRequests[idx].updatedAt = now
+        return true
+    }
+
+    /// Child: claim an approved request (must have enough gems)
+    @discardableResult
+    func claimRewardRequest(id: UUID) -> Bool {
+        guard let idx = rewardRequests.firstIndex(where: { $0.id == id }) else { return false }
+        var req = rewardRequests[idx]
+        guard req.status == .approved, let cost = req.approvedCost, cost > 0 else { return false }
+        let balance = childPointsTotal(childId: req.childId)
+        guard balance >= cost else { return false }
+
+        // Deduct gems now
+        appendPointsEntry(
+            childId: req.childId,
+            assignmentId: nil,
+            day: Date(),
+            delta: -cost,
+            reason: .redeemed
+        )
+
+        // Mark as claimed with timestamp
+        let now = Date()
+        req.status = .claimed
+        req.claimedAt = now
+        req.updatedAt = now
+        rewardRequests[idx] = req
+
+        // 🔹 Rolling window (after ledger change)
+        compactLedgerRollingWindow()
+
+        return true
+    }
+
+    /// Count for tab title (parent)
+    var pendingRewardRequestsCount: Int {
+        rewardRequests.filter { $0.status == .pending }.count
+    }
+
+    // MARK: - Manual balance adjustment (append-only ledger)
+
+    /// Whether an adjustment would keep the child's balance >= 0
+    func canAdjustChildPoints(childId: UUID, delta: Int) -> Bool {
+        let newTotal = childPointsTotal(childId: childId) + delta
+        return newTotal >= 0
+    }
+
+    /// Append a manual adjustment entry. Returns false if it would go below 0 (clamped).
+    @discardableResult
+    func adjustChildPoints(childId: UUID, delta: Int) -> Bool {
+        guard canAdjustChildPoints(childId: childId, delta: delta) else { return false }
+        appendPointsEntry(
+            childId: childId,
+            assignmentId: nil,
+            day: Date(),
+            delta: delta,
+            reason: .manualAdjust
+        )
+        // 🔹 Rolling window (after ledger change)
+        compactLedgerRollingWindow()
+        return true
+    }
+
+    // MARK: - Rolling Window Compaction (keep last N days; snapshot older)
+    /// Keeps per-child points history only for the last `ledgerKeepDays` days.
+    /// Before-cutoff entries are reduced to a single snapshot "Balance carried forward".
+    func compactLedgerRollingWindow() {
+        let days = ledgerKeepDays
+        guard days > 0 else { return }
+        guard !pointsLedger.isEmpty else { return }
+
+        let now = Date()
+        guard let cutoffRaw = Calendar.current.date(byAdding: .day, value: -days, to: now) else { return }
+        let cutoff = dayOnly(cutoffRaw)
+
+        let childIds = Set(pointsLedger.map { $0.childId })
+        var newLedger: [PointsEntry] = []
+        newLedger.reserveCapacity(pointsLedger.count)
+
+        for childId in childIds {
+            let childEntries = pointsLedger.filter { $0.childId == childId }
+            let oldEntries = childEntries.filter { dayOnly($0.day) < cutoff }
+            let recentEntries = childEntries.filter { dayOnly($0.day) >= cutoff }
+
+            let oldTotal = oldEntries.reduce(0) { $0 + $1.delta }
+
+            if !oldEntries.isEmpty {
+                if oldTotal != 0 {
+                    // Snapshot carries forward exact balance up to cutoff
+                    let snapshot = PointsEntry(
+                        childId: childId,
+                        assignmentId: nil,
+                        day: cutoff,                 // start-of-day cutoff
+                        delta: oldTotal,
+                        reason: .manualAdjust,       // rendered as "Balance carried forward" in UI when detected at cutoff
+                        createdAt: cutoff
+                    )
+                    newLedger.append(snapshot)
+                }
+                newLedger.append(contentsOf: recentEntries)
+            } else {
+                newLedger.append(contentsOf: recentEntries)
+            }
+        }
+
+        // Sort by day then createdAt for stable ordering
+        newLedger.sort {
+            if dayOnly($0.day) != dayOnly($1.day) { return dayOnly($0.day) < dayOnly($1.day) }
+            return $0.createdAt < $1.createdAt
+        }
+
+        if newLedger != pointsLedger {
+            pointsLedger = newLedger
         }
     }
 
@@ -637,6 +922,14 @@ final class AppState: ObservableObject {
         $locations.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.saveLocations() }
             .store(in: &cancellables)
+
+        $pointsLedger.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.savePointsLedger() }
+            .store(in: &cancellables)
+
+        $rewardRequests.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveRewardRequests() }
+            .store(in: &cancellables)
     }
 
     // MARK: - Storage folder
@@ -644,7 +937,6 @@ final class AppState: ObservableObject {
         let fm = FileManager.default
         let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
         ?? fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-
         let folder = base.appendingPathComponent("parent_child_checklist", isDirectory: true)
         if !fm.fileExists(atPath: folder.path) {
             try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -674,87 +966,78 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - JSON file URLs
-    private func childrenFileURL()        -> URL { appFolderURL().appendingPathComponent(childrenFileName) }
-    private func taskTemplatesFileURL()   -> URL { appFolderURL().appendingPathComponent(taskTemplatesFileName) }
-    private func customEmojisFileURL()    -> URL { appFolderURL().appendingPathComponent(customEmojisFileName) }
+    private func childrenFileURL() -> URL { appFolderURL().appendingPathComponent(childrenFileName) }
+    private func taskTemplatesFileURL() -> URL { appFolderURL().appendingPathComponent(taskTemplatesFileName) }
+    private func customEmojisFileURL() -> URL { appFolderURL().appendingPathComponent(customEmojisFileName) }
     private func taskAssignmentsFileURL() -> URL { appFolderURL().appendingPathComponent(taskAssignmentsFileName) }
     private func taskCompletionsFileURL() -> URL { appFolderURL().appendingPathComponent(taskCompletionsFileName) }
-    private func eventTemplatesFileURL()  -> URL { appFolderURL().appendingPathComponent(eventTemplatesFileName) }
-    private func eventAssignmentsFileURL()-> URL { appFolderURL().appendingPathComponent(eventAssignmentsFileName) }
-    private func locationsFileURL()       -> URL { appFolderURL().appendingPathComponent(locationsFileName) }
+    private func eventTemplatesFileURL() -> URL { appFolderURL().appendingPathComponent(eventTemplatesFileName) }
+    private func eventAssignmentsFileURL() -> URL { appFolderURL().appendingPathComponent(eventAssignmentsFileName) }
+    private func locationsFileURL() -> URL { appFolderURL().appendingPathComponent(locationsFileName) }
+    private func pointsLedgerFileURL() -> URL { appFolderURL().appendingPathComponent(pointsLedgerFileName) }
+    private func rewardRequestsFileURL() -> URL { appFolderURL().appendingPathComponent(rewardRequestsFileName) }
 
-    // MARK: - JSON persistence (Children)
+    // MARK: - JSON persistence
     private func saveChildren() { write(children, to: childrenFileURL(), label: "children") }
     private func loadChildren() { children = read([ChildProfile].self, from: childrenFileURL(), label: "children") ?? [] }
 
-    // MARK: - JSON persistence (Task Templates)
     private func saveTaskTemplates() { write(taskTemplates, to: taskTemplatesFileURL(), label: "task templates") }
     private func loadTaskTemplates() { taskTemplates = read([TaskTemplate].self, from: taskTemplatesFileURL(), label: "task templates") ?? [] }
 
-    // MARK: - JSON persistence (Custom Emojis)
     private func saveCustomEmojis() { write(customEmojis, to: customEmojisFileURL(), label: "custom emojis") }
     private func loadCustomEmojis() { customEmojis = read([String].self, from: customEmojisFileURL(), label: "custom emojis") ?? [] }
 
-    // MARK: - JSON persistence (Task Assignments)
     private func saveTaskAssignments() { write(taskAssignments, to: taskAssignmentsFileURL(), label: "task assignments") }
     private func loadTaskAssignments() { taskAssignments = read([TaskAssignment].self, from: taskAssignmentsFileURL(), label: "task assignments") ?? [] }
 
-    // MARK: - JSON persistence (Task Completions)
     private func saveTaskCompletions() { write(taskCompletions, to: taskCompletionsFileURL(), label: "task completions") }
     private func loadTaskCompletions() { taskCompletions = read([TaskCompletionRecord].self, from: taskCompletionsFileURL(), label: "task completions") ?? [] }
 
-    // MARK: - JSON persistence (Event Templates)
     private func saveEventTemplates() { write(eventTemplates, to: eventTemplatesFileURL(), label: "event templates") }
     private func loadEventTemplates() { eventTemplates = read([EventTemplate].self, from: eventTemplatesFileURL(), label: "event templates") ?? [] }
 
-    // MARK: - JSON persistence (Event Assignments)
     private func saveEventAssignments() { write(eventAssignments, to: eventAssignmentsFileURL(), label: "event assignments") }
     private func loadEventAssignments() { eventAssignments = read([EventAssignment].self, from: eventAssignmentsFileURL(), label: "event assignments") ?? [] }
 
-    // MARK: - JSON persistence (Locations)
     private func saveLocations() { write(locations, to: locationsFileURL(), label: "locations") }
     private func loadLocations() { locations = read([LocationItem].self, from: locationsFileURL(), label: "locations") ?? [] }
+
+    private func savePointsLedger() { write(pointsLedger, to: pointsLedgerFileURL(), label: "points ledger") }
+    private func loadPointsLedger() { pointsLedger = read([PointsEntry].self, from: pointsLedgerFileURL(), label: "points ledger") ?? [] }
+
+    private func saveRewardRequests() { write(rewardRequests, to: rewardRequestsFileURL(), label: "reward requests") }
+    private func loadRewardRequests() { rewardRequests = read([RewardRequest].self, from: rewardRequestsFileURL(), label: "reward requests") ?? [] }
 
     // MARK: - CloudKit bootstrap (read-only)
     private func bootstrapFromCloudKit() async {
         do {
-            // 1) Load snapshot of records from CloudKit (if any)
             let snapshot = try await familyStore.loadSnapshot()
-
-            // 2) Also resolve the current family context (for sharing UI later)
             do {
                 let s = try await shareCoordinator.bootstrapFamily()
                 switch s {
-                case .shared(let ctx), .privateOwner(let ctx):
-                    self.familyContext = ctx
+                case .shared(let ctx), .privateOwner(let ctx): self.familyContext = ctx
                 }
             } catch {
-                // Not fatal for data; just log for sharing UI
                 print("⚠️ Failed to resolve FamilyContext: \(error)")
             }
-
-            // 3) Only apply if CloudKit actually has user data
             guard FamilyDataStore.hasUserData(snapshot) else {
                 cloudKitLoaded = false
                 cloudKitErrorMessage = nil
                 print("ℹ️ CloudKit snapshot empty — keeping local JSON as source for now.")
                 return
             }
-
-            // Apply snapshot to @Published arrays
-            self.children        = snapshot.children
-            self.taskTemplates   = snapshot.taskTemplates
+            self.children = snapshot.children
+            self.taskTemplates = snapshot.taskTemplates
             self.taskAssignments = snapshot.taskAssignments
             self.taskCompletions = snapshot.taskCompletions
-            self.customEmojis    = snapshot.customEmojis
-            self.eventTemplates  = snapshot.eventTemplates
+            self.customEmojis = snapshot.customEmojis
+            self.eventTemplates = snapshot.eventTemplates
             self.eventAssignments = snapshot.eventAssignments
-            self.locations       = snapshot.locations
-
+            self.locations = snapshot.locations
+            // pointsLedger & rewardRequests are not yet fetched from CloudKit (read-only)
             cloudKitLoaded = true
             cloudKitErrorMessage = nil
             print("✅ CloudKit loaded family snapshot (\(children.count) children, \(taskTemplates.count) templates, \(eventTemplates.count) events)")
-
         } catch {
             cloudKitLoaded = false
             cloudKitErrorMessage = String(describing: error)
@@ -762,8 +1045,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Helpers for Sharing UI (optional convenience)
-    /// Return the correct CKDatabase for the current family context (or default private DB if unknown)
+    // MARK: - Helpers for Sharing UI
     func cloudDatabaseForCurrentFamily() -> CKDatabase {
         if let ctx = familyContext {
             switch ctx.database {
@@ -771,7 +1053,28 @@ final class AppState: ObservableObject {
             case .shared:  return CKContainer.default().sharedCloudDatabase
             }
         }
-        // Fallback
         return CKContainer.default().privateCloudDatabase
+    }
+}
+
+// MARK: - Custom Emoji usage lookups (for safe deletion)
+extension AppState {
+    /// Returns how many Task Templates and Event Templates currently use this emoji.
+    func emojiUsage(_ emoji: String) -> (tasks: Int, events: Int) {
+        let tasks = taskTemplates.reduce(0) { $0 + ($1.iconSymbol == emoji ? 1 : 0) }
+        let events = eventTemplates.reduce(0) { $0 + ($1.iconSymbol == emoji ? 1 : 0) }
+        return (tasks, events)
+    }
+
+    /// Returns the number of saved custom emojis that are used by templates.
+    func countCustomEmojisInUse() -> Int {
+        var used = 0
+        for e in customEmojis {
+            let u = emojiUsage(e)
+            if u.tasks > 0 || u.events > 0 {
+                used += 1
+            }
+        }
+        return used
     }
 }

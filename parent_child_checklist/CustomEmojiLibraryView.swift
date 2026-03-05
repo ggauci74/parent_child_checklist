@@ -1,8 +1,8 @@
 //
-//  CustomEmojiLibraryView.swift
-//  parent_child_checklist
+// CustomEmojiLibraryView.swift
+// parent_child_checklist
 //
-//  Created by George Gauci on 10/2/2026.
+// Created by George Gauci on 10/2/2026.
 //
 
 import SwiftUI
@@ -18,11 +18,19 @@ struct CustomEmojiLibraryView: View {
     @State private var inputEmoji: String = ""
     @State private var message: String? = nil
 
+    // Destructive confirmations
+    @State private var showClearAllConfirm: Bool = false
+    @State private var emojiPendingDelete: String? = nil
+    @State private var singleDeleteUsageMessage: String? = nil
+    @State private var showSingleDeleteConfirm: Bool = false
+
     private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
+
+                // Input + actions
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Paste any emoji")
                         .font(.headline)
@@ -47,9 +55,10 @@ struct CustomEmojiLibraryView: View {
 
                         if !appState.customEmojis.isEmpty {
                             Button("Clear All", role: .destructive) {
-                                appState.deleteAllCustomEmojis()
+                                showClearAllConfirm = true
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityLabel("Clear all saved emojis")
                         }
                     }
 
@@ -59,15 +68,27 @@ struct CustomEmojiLibraryView: View {
                             .foregroundStyle(.red)
                     }
 
-                    Text("Tip: Save emojis you want to reuse across tasks.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    // Tip + helper link (optional)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Tip: Save emojis you want to reuse across tasks.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        // Subtle helper link for parents to browse emojis
+                        if let url = URL(string: "https://www.emojicopy.com") {
+                            Link("Need emojis? Browse at EmojiCopy.com →", destination: url)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .accessibilityHint("Opens EmojiCopy dot com in Safari")
+                        }
+                    }
                 }
                 .padding(.horizontal)
                 .padding(.top, 12)
 
                 Divider()
 
+                // Emoji grid (saved)
                 if appState.customEmojis.isEmpty {
                     Spacer()
                     Text("No custom emojis yet.\nTap Add after pasting an emoji.")
@@ -97,7 +118,7 @@ struct CustomEmojiLibraryView: View {
                                 .buttonStyle(.plain)
                                 .contextMenu {
                                     Button(role: .destructive) {
-                                        appState.deleteCustomEmoji(emoji)
+                                        prepareSingleDelete(emoji)
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
@@ -105,7 +126,14 @@ struct CustomEmojiLibraryView: View {
                             }
                         }
                         .padding(.horizontal)
-                        .padding(.bottom, 16)
+
+                        // Small discoverability hint beneath the grid
+                        Text("Tip: Long‑press an emoji to delete it.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 8)
+                            .padding(.horizontal)
+                            .padding(.bottom, 12)
                     }
                 }
             }
@@ -115,13 +143,46 @@ struct CustomEmojiLibraryView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            // MARK: - Clear All confirmation
+            .alert("Delete all saved emojis?", isPresented: $showClearAllConfirm) {
+                Button("Delete All", role: .destructive) {
+                    appState.deleteAllCustomEmojis()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                let inUse = appState.countCustomEmojisInUse()
+                let total = appState.customEmojis.count
+                if inUse > 0 {
+                    Text("This will remove \(total) saved emojis.\n\(inUse) of them are used by templates. Deleting won’t change any existing tasks or events.")
+                } else {
+                    Text("This will remove \(total) saved emojis. Deleting won’t change any existing tasks or events.")
+                }
+            }
+            // MARK: - Single delete confirmation (when in use)
+            .alert("Delete this emoji?", isPresented: $showSingleDeleteConfirm, presenting: emojiPendingDelete) { emoji in
+                Button("Delete", role: .destructive) {
+                    if let e = emojiPendingDelete {
+                        appState.deleteCustomEmoji(e)
+                        emojiPendingDelete = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    emojiPendingDelete = nil
+                }
+            } message: { _ in
+                if let msg = singleDeleteUsageMessage {
+                    Text(msg)
+                } else {
+                    Text("This will remove the emoji from your saved list. Deleting won’t change any existing tasks or events.")
+                }
+            }
         }
     }
 
+    // MARK: - Actions
     private func addEmoji() {
         message = nil
         let t = inputEmoji.trimmed
-
         guard !t.isEmpty else {
             message = "Please paste an emoji."
             return
@@ -134,7 +195,6 @@ struct CustomEmojiLibraryView: View {
             message = "That emoji is already saved."
             return
         }
-
         let ok = appState.addCustomEmoji(t)
         if ok {
             inputEmoji = ""
@@ -143,4 +203,27 @@ struct CustomEmojiLibraryView: View {
             message = "Couldn’t add that emoji. Try again."
         }
     }
+
+    /// Initiates single-emoji deletion. If the emoji is used in templates, ask for confirmation.
+    private func prepareSingleDelete(_ emoji: String) {
+        let usage = appState.emojiUsage(emoji)
+        if usage.tasks > 0 || usage.events > 0 {
+            // Build a friendly usage message
+            var parts: [String] = []
+            if usage.tasks > 0 { parts.append("\(usage.tasks) task template\(usage.tasks == 1 ? "" : "s")") }
+            if usage.events > 0 { parts.append("\(usage.events) event template\(usage.events == 1 ? "" : "s")") }
+            let joined = parts.joined(separator: " and ")
+            singleDeleteUsageMessage =
+            """
+            This emoji is used in \(joined).
+            Deleting won’t change any existing tasks or events, but you won’t be able to select it again in those templates unless you save it here again.
+            """
+            emojiPendingDelete = emoji
+            showSingleDeleteConfirm = true
+        } else {
+            // Not used anywhere — delete immediately
+            appState.deleteCustomEmoji(emoji)
+        }
+    }
 }
+

@@ -11,103 +11,6 @@ enum UserRole: String {
     case child
 }
 
-// MARK: - Emoji Icon Catalog (kid-friendly + colourful)
-enum EmojiCatalog {
-
-    enum Category: String, CaseIterable, Identifiable {
-        case all = "All"
-        case myEmojis = "My Emojis"   // ✅ NEW
-        case morning = "Morning"
-        case hygiene = "Hygiene"
-        case school = "School"
-        case chores = "Chores"
-        case food = "Food"
-        case pets = "Pets"
-        case sports = "Sports"
-        case time = "Time"
-        case rewards = "Fun"
-        case health = "Health"
-        case outdoors = "Outdoors"
-
-        var id: String { rawValue }
-    }
-
-    static func emojis(for category: Category) -> [String] {
-        if category == .all { return allEmojis }
-        return categoryMap[category] ?? allEmojis
-    }
-
-    static let allEmojis: [String] = Array(Set(categoryMap.values.flatMap { $0 }))
-        .sorted()
-
-    // Curated categories (adjust anytime)
-    private static let categoryMap: [Category: [String]] = [
-
-        .morning: ["☀️","🌤️","🌙","⭐️","⏰","🛏️","🧸","🧦","👕","🪥"],
-
-        .hygiene: ["🪥","🧴","🧼","🧻","🧽","🪒","🚿","🛁","💧","🧹","🪮"],
-
-        .school: ["🎒","📚","📖","✏️","🖊️","🖍️","📐","📏","🧠","🧪","🔬","🧾","📅"],
-
-        .chores: ["✅","☑️","🧹","🧺","🧼","🧽","🗑️","♻️","🔧","🪛","🪣","🧤","🪠"],
-
-        .food: ["🍎","🍌","🍇","🍓","🥕","🥪","🍳","🥣","🍽️","🥛","🥃","🍞","🍕","🍪"],
-
-        .pets: ["🐶","🐱","🐰","🐹","🐦","🐠","🐢","🐴","🐾","🦄","🧶"],
-
-        .sports: ["⚽️","🏀","🏈","🎾","🏐","🏓","🥋","🏊‍♂️","🚴‍♂️","🛹","🏆","🥇"],
-
-        .time: ["⏱️","⏳","🕒","🗓️","📅","🔔","📌"],
-
-        .rewards: ["🎮","🎧","🎨","🎭","🎲","🎁","🍿","🍦","🎂","🎉","🥳","🚙","👑","🌈","✨","💎"],
-
-        .health: ["💊","🩹","🩺","❤️","🧘‍♂️","🥗","💧"],
-
-        .outdoors: ["🌳","🌿","🍃","🌸","🏞️","⛰️","🌊","☔️","❄️","🔥","🚶‍♂️","🚲","📸"],
-
-        .all: []
-    ]
-}
-
-// MARK: - Emoji Detection + Sanitising Helpers
-extension String {
-
-    /// Simple heuristic to detect emojis (including composed sequences).
-    var containsEmoji: Bool {
-        unicodeScalars.contains { scalar in
-            scalar.properties.isEmojiPresentation || scalar.properties.isEmoji
-        }
-    }
-
-    /// Trims whitespace/newlines and normalises.
-    var trimmed: String {
-        trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-/// Emoji-only task icon view.
-/// If icon isn't an emoji (e.g., old saved SF symbol name), show a safe default ✅.
-struct TaskEmojiIconView: View {
-    let icon: String
-    var size: CGFloat = 24
-
-    private var displayEmoji: String {
-        let t = icon.trimmed
-        return t.containsEmoji ? t : "✅"
-    }
-
-    var body: some View {
-        Text(displayEmoji)
-            .font(.system(size: size))
-            .lineLimit(1)
-            .minimumScaleFactor(0.5)
-            .frame(width: 40, height: 40)
-            .background(.thinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .accessibilityLabel("Task icon")
-    }
-}
-
 // MARK: - App Root
 struct ContentView: View {
     @AppStorage("userRole") private var userRoleRawValue: String?
@@ -116,15 +19,27 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if let raw = userRoleRawValue,
-               let role = UserRole(rawValue: raw) {
+            if let raw = userRoleRawValue, let role = UserRole(rawValue: raw) {
                 switch role {
                 case .parent:
                     ParentHomeView()
                 case .child:
-                    if let idString = selectedChildIdRaw,
-                       let uuid = UUID(uuidString: idString) {
-                        ChildHomeView(childId: uuid)
+                    if let idString = selectedChildIdRaw, let uuid = UUID(uuidString: idString) {
+                        if let child = appState.children.first(where: { $0.id == uuid }) {
+                            let hasAvatar = !(child.avatarId ?? "")
+                                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            if hasAvatar {
+                                // Avatar already chosen -> show child tabs (Today is default)
+                                ChildRootTabView(childId: uuid)
+                            } else {
+                                // First-time only: avatar setup flow
+                                ChildAvatarSetupView(childId: uuid) { }
+                                    .environmentObject(appState)
+                            }
+                        } else {
+                            // If not yet loaded, still show tabs; guards inside handle state
+                            ChildRootTabView(childId: uuid)
+                        }
                     } else {
                         ChildChooseProfileView()
                     }
@@ -136,7 +51,153 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Role Selection
+// MARK: - Parent Home (Tabs: Children · Tasks · Events · Requests · Settings)
+struct ParentHomeView: View {
+    @EnvironmentObject private var appState: AppState
+
+    // ✅ Share the selected parent tab across the app
+    @AppStorage("parentSelectedTab") private var parentSelectedTab: String = "children"
+
+    private var pendingBadge: Int { appState.pendingRewardRequestsCount }
+    /// Title that includes the pending count when > 0, e.g. "Requests (3)"
+    private var requestsTabTitle: String {
+        pendingBadge > 0 ? "Requests (\(pendingBadge))" : "Requests"
+    }
+
+    var body: some View {
+        TabView(selection: $parentSelectedTab) {
+            // Children
+            ParentChildrenTabView()
+                .tabItem { Label("Children", systemImage: "person.2.fill") }
+                .tag("children")
+
+            // Tasks -> DIRECT host of AssignTaskToChildView
+            ParentAssignTaskScreen()
+                .tabItem { Label("Tasks", systemImage: "checklist") }
+                .tag("tasks")
+
+            // Events -> DIRECT host of AssignEventToChildView
+            ParentAssignEventScreen()
+                .tabItem { Label("Events", systemImage: "calendar") }
+                .tag("events")
+
+            // Requests
+            ParentRewardsTabView()
+                .tabItem { Label(requestsTabTitle, systemImage: "diamond.fill") }
+                .tag("requests")
+
+            // Settings
+            SettingsView()
+                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tag("settings")
+        }
+    }
+}
+
+// MARK: - Child resolution helper (shared by Task/Event tabs)
+fileprivate func resolvePreferredChildId(
+    children: [ChildProfile],
+    lastParentChildIdRaw: String?,
+    selectedChildIdRaw: String?
+) -> UUID? {
+    // 1) last child the parent viewed in weekly screen (ParentChildWeeklyView writes this)
+    if let raw = lastParentChildIdRaw, let uuid = UUID(uuidString: raw),
+       children.contains(where: { $0.id == uuid }) {
+        return uuid
+    }
+    // 2) child-side selection (if you want to honor it on parent)
+    if let raw = selectedChildIdRaw, let uuid = UUID(uuidString: raw),
+       children.contains(where: { $0.id == uuid }) {
+        return uuid
+    }
+    // 3) exactly one child
+    if children.count == 1, let only = children.first {
+        return only.id
+    }
+    // 4) otherwise default to the first (one-tap behavior as requested)
+    return children.first?.id
+}
+
+
+// MARK: - Tasks tab: DIRECT AssignTaskToChildView (fresh each open)
+private struct ParentAssignTaskScreen: View {
+    @EnvironmentObject private var appState: AppState
+    @AppStorage("lastParentChildId") private var lastParentChildIdRaw: String?
+    @AppStorage("selectedChildId")   private var selectedChildIdRaw: String?
+
+    // 👇 Regenerate this each time the tab becomes visible to force a fresh view
+    @State private var openToken = UUID()
+
+    var body: some View {
+        Group {
+            if let cid = resolvePreferredChildId(
+                children: appState.children,
+                lastParentChildIdRaw: lastParentChildIdRaw,
+                selectedChildIdRaw: selectedChildIdRaw
+            ) {
+                AssignTaskToChildView(
+                    childId: cid,
+                    defaultStartDate: Date(),
+                    onShowWeeklyToast: { _ in }
+                )
+                .environmentObject(appState)
+                .id(openToken)                // 👈 Force a brand-new instance (clears @State)
+                .onAppear { openToken = UUID() } // 👈 Refresh token on each entry to this tab
+            } else {
+                NoChildrenHintView(title: "Assign Task")
+            }
+        }
+    }
+}
+// MARK: - Events tab: DIRECT AssignEventToChildView
+private struct ParentAssignEventScreen: View {
+    @EnvironmentObject private var appState: AppState
+    @AppStorage("lastParentChildId") private var lastParentChildIdRaw: String?
+    @AppStorage("selectedChildId")   private var selectedChildIdRaw: String?
+
+    var body: some View {
+        Group {
+            if let cid = resolvePreferredChildId(
+                children: appState.children,
+                lastParentChildIdRaw: lastParentChildIdRaw,
+                selectedChildIdRaw: selectedChildIdRaw
+            ) {
+                AssignEventToChildView(
+                    childId: cid,
+                    defaultStartDate: Date(),
+                    onShowWeeklyToast: { _ in }
+                )
+                .environmentObject(appState)
+            } else {
+                NoChildrenHintView(title: "Assign Event")
+            }
+        }
+    }
+}
+
+// MARK: - Tiny empty-state for when there are no children
+private struct NoChildrenHintView: View {
+    let title: String
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                Image(systemName: "person.badge.plus")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("No children yet")
+                    .font(.headline)
+                Text("Add a child in the Children tab, then return to \(title).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding()
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+// MARK: - Role Selection (onboarding entry)
 struct RoleSelectionView: View {
     @AppStorage("userRole") private var userRoleRawValue: String?
 
@@ -144,11 +205,9 @@ struct RoleSelectionView: View {
         NavigationStack {
             VStack(spacing: 18) {
                 Spacer()
-
                 Text("Welcome 👋")
                     .font(.largeTitle)
                     .fontWeight(.heavy)
-
                 Text("Choose who you are to get started")
                     .foregroundStyle(.secondary)
 
@@ -157,13 +216,10 @@ struct RoleSelectionView: View {
                         userRoleRawValue = UserRole.parent.rawValue
                     } label: {
                         HStack {
-                            Text("👨‍👩‍👧‍👦")
-                                .font(.title2)
-                            Text("I'm a Parent")
-                                .fontWeight(.semibold)
+                            Text("👨‍👩‍👧‍👦").font(.title2)
+                            Text("I'm a Parent").fontWeight(.semibold)
                             Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
                         }
                         .padding()
                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -173,13 +229,10 @@ struct RoleSelectionView: View {
                         userRoleRawValue = UserRole.child.rawValue
                     } label: {
                         HStack {
-                            Text("🧒")
-                                .font(.title2)
-                            Text("I'm a Child")
-                                .fontWeight(.semibold)
+                            Text("🧒").font(.title2)
+                            Text("I'm a Child").fontWeight(.semibold)
                             Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
                         }
                         .padding()
                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -188,7 +241,6 @@ struct RoleSelectionView: View {
                 .padding(.horizontal)
 
                 Spacer()
-
                 Text("Tip: parents create tasks and events, kids tick them off ✅")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -201,379 +253,84 @@ struct RoleSelectionView: View {
     }
 }
 
-// MARK: - Parent Home
-struct ParentHomeView: View {
-    var body: some View {
-        TabView {
-            ParentChildrenTabView()
-                .tabItem { Label("Children", systemImage: "person.2.fill") }
-            
-            ParentTasksTabView()
-                .tabItem { Label("Tasks", systemImage: "checklist") }
-            
-            ParentEventsTabView()
-                .tabItem { Label("Events", systemImage: "calendar") }
-            
-            ParentFamilyTabView()
-                .tabItem { Label("Family", systemImage: "person.crop.circle.badge.plus") }
-        }
-    }
-}
-// MARK: - Parent Children Tab
-struct ParentChildrenTabView: View {
-        @AppStorage("userRole") private var userRoleRawValue: String?
-        @AppStorage("selectedChildId") private var selectedChildIdRaw: String?
-        @EnvironmentObject private var appState: AppState
-        
-        @State private var showAddChild = false
-        @State private var childPendingDelete: ChildProfile?
-        @State private var childPendingEdit: ChildProfile?
-        
-        var body: some View {
-            NavigationStack {
-                List {
-                    Section("Children") {
-                        ForEach(appState.children) { child in
-                            NavigationLink {
-                                ParentChildWeeklyView(childId: child.id)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 36)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(child.name)
-                                            .font(.headline)
-                                        
-                                        Text(child.avatarId == nil ? "Not chosen yet" : AvatarCatalog.avatar(for: child.avatarId).displayName)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .padding(.vertical, 6)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button {
-                                    childPendingDelete = child
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                                .tint(.red)
-                                
-                                Button {
-                                    childPendingEdit = child
-                                } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }
-                                .tint(.blue)
-                            }
-                        }
-                    }
-                    
-                    Section {
-                        Button("Switch Role (Temporary)") {
-                            userRoleRawValue = nil
-                            selectedChildIdRaw = nil
-                        }
-                        .foregroundStyle(.red)
-                    }
-                }
-                .navigationTitle("Parent")
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button { showAddChild = true } label: {
-                            Image(systemName: "plus").font(.headline)
-                        }
-                    }
-                }
-                .sheet(isPresented: $showAddChild) {
-                    AddChildView()
-                        .environmentObject(appState)
-                }
-                .sheet(item: $childPendingEdit) { child in
-                    EditChildView(child: child)
-                        .environmentObject(appState)
-                }
-                .alert("Delete child?", isPresented: Binding(
-                    get: { childPendingDelete != nil },
-                    set: { if !$0 { childPendingDelete = nil } }
-                )) {
-                    Button("Delete", role: .destructive) {
-                        if let child = childPendingDelete {
-                            appState.deleteChild(id: child.id)
-                        }
-                        childPendingDelete = nil
-                    }
-                    Button("Cancel", role: .cancel) {
-                        childPendingDelete = nil
-                    }
-                } message: {
-                    Text("This will remove the child and all their assignments and completion history.")
-                }
-            }
-        }
-    }
+// MARK: - Child Choose Profile (Step 1 for child role)
+struct ChildChooseProfileView: View {
+    @EnvironmentObject private var appState: AppState
+    @AppStorage("userRole") private var userRoleRawValue: String?
+    @AppStorage("selectedChildId") private var selectedChildIdRaw: String?
 
-// MARK: - Parent Tasks Tab
-    struct ParentTasksTabView: View {
-        @EnvironmentObject private var appState: AppState
-        
-        @State private var showAddTask = false
-        @State private var taskPendingEdit: TaskTemplate?
-        @State private var taskPendingDelete: TaskTemplate?
-        @State private var showDeleteBlockedAlert = false
-        
-        var body: some View {
-            NavigationStack {
-                List {
-                    Section("Task Library") {
-                        if appState.taskTemplates.isEmpty {
-                            Text("No tasks yet. Tap + to create one.")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(appState.taskTemplates.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }) { task in
-                                HStack(spacing: 12) {
-                                    TaskEmojiIconView(icon: task.iconSymbol, size: 22)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(task.title)
-                                            .font(.headline)
-                                        
-                                        if task.rewardPoints > 0 {
-                                            Text("💎 \(task.rewardPoints) point\(task.rewardPoints == 1 ? "" : "s")")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    
-                                    Spacer()
-                                }
-                                .padding(.vertical, 6)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    Button {
-                                        taskPendingDelete = task
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                    .tint(.red)
-                                    
-                                    Button {
-                                        taskPendingEdit = task
-                                    } label: {
-                                        Label("Edit", systemImage: "pencil")
-                                    }
-                                    .tint(.blue)
-                                }
-                            }
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Spacer(minLength: 10)
+
+                Text("Who are you?")
+                    .font(.largeTitle)
+                    .fontWeight(.heavy)
+
+                Text("Pick your name to see your tasks ✅")
+                    .foregroundStyle(.secondary)
+
+                List(appState.children) { child in
+                    // Correct "has avatar" logic
+                    let hasAvatar = !(child.avatarId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+
+                    if hasAvatar {
+                        // Child already has an avatar → jump straight into tabs
+                        Button {
+                            selectedChildIdRaw = child.id.uuidString
+                            // ContentView will re-render and present ChildRootTabView
+                        } label: {
+                            row(for: child)
                         }
-                    }
-                }
-                .navigationTitle("Tasks")
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button { showAddTask = true } label: {
-                            Image(systemName: "plus").font(.headline)
-                        }
-                    }
-                }
-                .sheet(isPresented: $showAddTask) {
-                    AddTaskTemplateView()
-                        .environmentObject(appState)
-                }
-                .sheet(item: $taskPendingEdit) { tpl in
-                    EditTaskTemplateView(template: tpl)
-                        .environmentObject(appState)
-                }
-                .alert("Delete task?", isPresented: Binding(
-                    get: { taskPendingDelete != nil },
-                    set: { if !$0 { taskPendingDelete = nil } }
-                )) {
-                    Button("Delete", role: .destructive) {
-                        if let tpl = taskPendingDelete {
-                            let ok = appState.deleteTaskTemplate(id: tpl.id)
-                            if !ok { showDeleteBlockedAlert = true }
-                        }
-                        taskPendingDelete = nil
-                    }
-                    Button("Cancel", role: .cancel) {
-                        taskPendingDelete = nil
-                    }
-                } message: {
-                    Text("This will delete the task from the library.")
-                }
-                .alert("Can’t delete", isPresented: $showDeleteBlockedAlert) {
-                    Button("OK", role: .cancel) { }
-                } message: {
-                    Text("This task is currently assigned to at least one child. Remove the assignments first.")
-                }
-            }
-        }
-    }
-    
-    // MARK: - Parent Events Tab
-    struct ParentEventsTabView: View {
-        @EnvironmentObject private var appState: AppState
-        
-        @State private var showAddEvent = false
-        @State private var eventPendingEdit: EventTemplate?
-        @State private var eventPendingDelete: EventTemplate?
-        
-        var body: some View {
-            NavigationStack {
-                List {
-                    Section("Event Library") {
-                        if appState.eventTemplates.isEmpty {
-                            Text("No events yet. Tap + to create one.")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(appState.eventTemplates.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }) { event in
-                                HStack(spacing: 12) {
-                                    TaskEmojiIconView(icon: event.iconSymbol, size: 22)
-                                    
-                                    Text(event.title)
-                                        .font(.headline)
-                                    
-                                    Spacer()
-                                }
-                                .padding(.vertical, 6)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    Button {
-                                        eventPendingDelete = event
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                    .tint(.red)
-                                    
-                                    Button {
-                                        eventPendingEdit = event
-                                    } label: {
-                                        Label("Edit", systemImage: "pencil")
-                                    }
-                                    .tint(.blue)
-                                }
-                            }
-                        }
-                    }
-                }
-                .navigationTitle("Events")
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button { showAddEvent = true } label: {
-                            Image(systemName: "plus").font(.headline)
-                        }
-                    }
-                }
-                .sheet(isPresented: $showAddEvent) {
-                    AddEventTemplateView()
-                        .environmentObject(appState)
-                }
-                .sheet(item: $eventPendingEdit) { tpl in
-                    EditEventTemplateView(template: tpl)
-                        .environmentObject(appState)
-                }
-                .alert("Delete event?", isPresented: Binding(
-                    get: { eventPendingDelete != nil },
-                    set: { if !$0 { eventPendingDelete = nil } }
-                )) {
-                    Button("Delete", role: .destructive) {
-                        if let tpl = eventPendingDelete {
-                            appState.deleteEventTemplate(id: tpl.id)
-                        }
-                        eventPendingDelete = nil
-                    }
-                    Button("Cancel", role: .cancel) { eventPendingDelete = nil }
-                } message: {
-                    Text("This will delete the event from the library.")
-                }
-            }
-        }
-    }
-    
-    // MARK: - Child Home
-    struct ChildHomeView: View {
-        let childId: UUID
-        @AppStorage("userRole") private var userRoleRawValue: String?
-        @AppStorage("selectedChildId") private var selectedChildIdRaw: String?
-        @EnvironmentObject private var appState: AppState
-        
-        var body: some View {
-            NavigationStack {
-                VStack(spacing: 16) {
-                    Text("Today")
-                        .font(.largeTitle)
-                        .fontWeight(.heavy)
-                        .padding(.top, 16)
-                    
-                    Text("Your tasks will show here soon ✅")
-                        .foregroundStyle(.secondary)
-                    
-                    Spacer()
-                    
-                    Button("Switch Role (Temporary)") {
-                        userRoleRawValue = nil
-                        selectedChildIdRaw = nil
-                    }
-                    .foregroundStyle(.red)
-                    .padding(.bottom, 12)
-                }
-                .padding()
-                .navigationTitle("")
-                .navigationBarTitleDisplayMode(.inline)
-            }
-        }
-    }
-    
-    // MARK: - Child Choose Profile (Step 1)
-    struct ChildChooseProfileView: View {
-        @EnvironmentObject private var appState: AppState
-        
-        // ✅ Needed so we ...
-        @AppStorage("userRole") private var userRoleRawValue: String?
-        
-        var body: some View {
-            NavigationStack {
-                VStack(spacing: 16) {
-                    Spacer(minLength: 10)
-                    
-                    Text("Who are you?")
-                        .font(.largeTitle)
-                        .fontWeight(.heavy)
-                    
-                    Text("Pick your name to see your tasks ✅")
-                        .foregroundStyle(.secondary)
-                    
-                    List(appState.children) { child in
+                        .buttonStyle(.plain)
+                    } else {
+                        // First-time only → go to avatar setup flow
                         NavigationLink {
                             ChildAvatarSetupView(childId: child.id)
+                                .environmentObject(appState)
                         } label: {
-                            HStack(spacing: 12) {
-                                ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 42)
-                                
-                                Text(child.name)
-                                    .font(.title3)
-                                    .fontWeight(.semibold)
-                                
-                                Spacer()
-                                
-                                Image(systemName: "chevron.right")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 8)
+                            row(for: child)
                         }
                     }
-                    .listStyle(.insetGrouped)
-                    
-                    Spacer()
-                    
-                    Button("Back") {
-                        userRoleRawValue = nil
-                    }
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 20)
                 }
-                .padding(.horizontal)
-                .navigationTitle("")
-                .navigationBarTitleDisplayMode(.inline)
+                .listStyle(.insetGrouped)
+
+                Spacer()
+
+                Button("Back") {
+                    userRoleRawValue = nil
+                    selectedChildIdRaw = nil
+                }
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 20)
             }
+            .padding(.horizontal)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 
+    // MARK: - Row UI
+    @ViewBuilder
+    private func row(for child: ChildProfile) -> some View {
+        HStack(spacing: 12) {
+            ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 42)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(child.name)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                Text(child.avatarId == nil
+                     ? "Not chosen yet"
+                     : AvatarCatalog.avatar(for: child.avatarId).displayName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+}

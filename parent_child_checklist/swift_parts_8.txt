@@ -1,0 +1,1976 @@
+e: Occurrence
+    /// Monday-first weekday selection: 0=Mon ... 6=Sun
+    var weekdays: [Int]
+
+    // Time windows (optional)
+    var startTime: Date?
+    var finishTime: Date?
+
+    // Duration (optional)
+    var durationMinutes: Int?
+
+    // NEW: Link to an event assignment (optional)
+    /// If set, this task is dependent on that event assignment.
+    /// If the event assignment is deleted, this task should also be deleted (Option A).
+    var linkedEventAssignmentId: UUID?
+
+    // NEW: Notify (Start)
+    var startNotifyEnabled: Bool
+    var startNotifyRecipient: NotifyRecipient
+    /// Minutes before start (0 = at start time). Nil when disabled.
+    var startNotifyOffsetMinutes: Int?
+
+    // NEW: Notify (Finish)
+    var finishNotifyEnabled: Bool
+    var finishNotifyRecipient: NotifyRecipient
+    /// Minutes before finish (0 = at finish time). Nil when disabled.
+    var finishNotifyOffsetMinutes: Int?
+
+    // Audit
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        childId: UUID,
+        templateId: UUID? = nil,
+        taskTitle: String,
+        taskIcon: String,
+        rewardPoints: Int,
+        helper: String? = nil,
+        subtractIfNotCompleted: Bool = false,
+        alertMe: Bool = false,
+        photoEvidenceRequired: Bool = false,
+        isActive: Bool = true,
+        startDate: Date,
+        endDate: Date? = nil,
+        occurrence: Occurrence = .specifiedDays,
+        weekdays: [Int] = [0,1,2,3,4,5,6],
+        startTime: Date? = nil,
+        finishTime: Date? = nil,
+        durationMinutes: Int? = nil,
+        linkedEventAssignmentId: UUID? = nil,
+        // NEW notify defaults (UI-only until wired)
+        startNotifyEnabled: Bool = false,
+        startNotifyRecipient: NotifyRecipient = .both,
+        startNotifyOffsetMinutes: Int? = nil,
+        finishNotifyEnabled: Bool = false,
+        finishNotifyRecipient: NotifyRecipient = .both,
+        finishNotifyOffsetMinutes: Int? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.childId = childId
+        self.templateId = templateId
+        self.taskTitle = taskTitle
+        self.taskIcon = taskIcon
+        self.rewardPoints = max(0, rewardPoints)
+        self.helper = helper
+        self.subtractIfNotCompleted = subtractIfNotCompleted
+        self.alertMe = alertMe
+        self.photoEvidenceRequired = photoEvidenceRequired
+        self.isActive = isActive
+        self.startDate = startDate
+        self.endDate = endDate
+        self.occurrence = occurrence
+        self.weekdays = weekdays.sorted()
+        self.startTime = startTime
+        self.finishTime = finishTime
+        self.durationMinutes = durationMinutes
+        self.linkedEventAssignmentId = linkedEventAssignmentId
+        self.startNotifyEnabled = startNotifyEnabled
+        self.startNotifyRecipient = startNotifyRecipient
+        self.startNotifyOffsetMinutes = startNotifyOffsetMinutes
+        self.finishNotifyEnabled = finishNotifyEnabled
+        self.finishNotifyRecipient = finishNotifyRecipient
+        self.finishNotifyOffsetMinutes = finishNotifyOffsetMinutes
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, childId, templateId
+        case taskTitle, taskIcon, rewardPoints, helper
+        case subtractIfNotCompleted, alertMe, photoEvidenceRequired, isActive
+        case startDate, endDate, occurrence, weekdays
+        case startTime, finishTime, durationMinutes
+        case linkedEventAssignmentId
+        case startNotifyEnabled, startNotifyRecipient, startNotifyOffsetMinutes
+        case finishNotifyEnabled, finishNotifyRecipient, finishNotifyOffsetMinutes
+        case createdAt, updatedAt
+    }
+}
+
+// MARK: - Task Completion Record (per assignment per day) + Photo Evidence
+
+struct TaskCompletionRecord: Identifiable, Hashable, Codable {
+    let id: UUID
+    var assignmentId: UUID
+    /// Stored as the start-of-day date (local calendar)
+    var day: Date
+    /// Optional timestamp
+    var completedAt: Date?
+
+    // ---- Photo Evidence (CloudKit CKAsset) ----
+    /// True when a photo evidence asset exists on this record in CloudKit.
+    /// Persisted in local JSON for lightweight UI decisions (e.g., an indicator),
+    /// while the actual local file URLs (below) remain transient/unencoded.
+    var hasPhotoEvidence: Bool
+
+    /// Local temporary URL of the downloaded full-resolution CKAsset (transient; not encoded).
+    var photoEvidenceLocalURL: URL?
+
+    /// Local temporary URL of the downloaded thumbnail CKAsset (transient; not encoded).
+    var photoThumbnailLocalURL: URL?
+
+    init(
+        id: UUID = UUID(),
+        assignmentId: UUID,
+        day: Date,
+        completedAt: Date? = nil,
+        hasPhotoEvidence: Bool = false,
+        photoEvidenceLocalURL: URL? = nil,
+        photoThumbnailLocalURL: URL? = nil
+    ) {
+        self.id = id
+        self.assignmentId = assignmentId
+        self.day = day
+        self.completedAt = completedAt
+        self.hasPhotoEvidence = hasPhotoEvidence
+        self.photoEvidenceLocalURL = photoEvidenceLocalURL
+        self.photoThumbnailLocalURL = photoThumbnailLocalURL
+    }
+
+    // Encode only stable metadata; do not persist transient file URLs
+    enum CodingKeys: String, CodingKey {
+        case id, assignmentId, day, completedAt, hasPhotoEvidence
+        // NOTE: photoEvidenceLocalURL, photoThumbnailLocalURL intentionally omitted
+    }
+}
+
+// Represents a single task assigned to a child (legacy placeholder; will be replaced later)
+struct TaskItem: Identifiable, Hashable, Codable {
+    let id: UUID
+    var childId: UUID
+    var title: String
+    var iconSymbol: String
+    var isCompleteToday: Bool
+    var lastCompletedAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        childId: UUID,
+        title: String,
+        iconSymbol: String,
+        isCompleteToday: Bool = false,
+        lastCompletedAt: Date? = nil
+    ) {
+        self.id = id
+        self.childId = childId
+        self.title = title
+        self.iconSymbol = iconSymbol
+        self.isCompleteToday = isCompleteToday
+        self.lastCompletedAt = lastCompletedAt
+    }
+}
+
+// MARK: - Color hex helper
+
+extension Color {
+    init(hex: String) {
+        let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: cleaned).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch cleaned.count {
+        case 6:
+            (a, r, g, b) = (255, (int >> 16) & 255, (int >> 8) & 255, int & 255)
+        case 8:
+            (a, r, g, b) = ((int >> 24) & 255, (int >> 16) & 255, (int >> 8) & 255, int & 255)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
+    }
+}
+
+// MARK: - EVENTS + LOCATIONS
+
+/// Parent-defined locations list (reused by event assignments)
+struct LocationItem: Identifiable, Hashable, Codable {
+    let id: UUID
+    var name: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+/// Event template = what the event is (no location here)
+struct EventTemplate: Identifiable, Hashable, Codable {
+    let id: UUID
+    var title: String
+    var iconSymbol: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        iconSymbol: String,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.title = title
+        self.iconSymbol = iconSymbol
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+/// EventAssignment = scheduled instance for a child (includes optional location + alert offset)
+struct EventAssignment: Identifiable, Hashable, Codable {
+    enum Occurrence: String, Codable, CaseIterable, Identifiable {
+        case onceOnly
+        case specifiedDays
+        var id: String { rawValue }
+        var displayName: String {
+            switch self {
+            case .onceOnly: return "Once Only"
+            case .specifiedDays: return "Specified Days"
+            }
+        }
+    }
+
+    let id: UUID
+
+    // Ownership
+    var childId: UUID
+    var templateId: UUID?
+
+    // Snapshot
+    var eventTitle: String
+    var eventIcon: String
+
+    // Optional helper
+    var helper: String?
+
+    // Active toggle
+    var isActive: Bool
+
+    // Dates / schedule
+    var startDate: Date
+    var endDate: Date?
+    var occurrence: Occurrence
+    /// Monday-first weekday selection: 0=Mon ... 6=Sun
+    var weekdays: [Int]
+
+    // Time
+    var startTime: Date?
+    var finishTime: Date?
+    var durationMinutes: Int?
+
+    // Location (per assignment)
+    var locationId: UUID?
+    var locationNameSnapshot: String
+
+    // Alerts (legacy single-field alerts; kept)
+    var alertMe: Bool
+    /// Minutes before start time (0 = at start time). Nil when alertMe == false.
+    var alertOffsetMinutes: Int?
+
+    // NEW: Notify (Start)
+    var startNotifyEnabled: Bool
+    var startNotifyRecipient: NotifyRecipient
+    var startNotifyOffsetMinutes: Int?
+
+    // NEW: Notify (Finish)
+    var finishNotifyEnabled: Bool
+    var finishNotifyRecipient: NotifyRecipient
+    var finishNotifyOffsetMinutes: Int?
+
+    // Audit
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        childId: UUID,
+        templateId: UUID? = nil,
+        eventTitle: String,
+        eventIcon: String,
+        helper: String? = nil,
+        isActive: Bool = true,
+        startDate: Date,
+        endDate: Date? = nil,
+        occurrence: Occurrence = .specifiedDays,
+        weekdays: [Int] = [0,1,2,3,4,5,6],
+        startTime: Date? = nil,
+        finishTime: Date? = nil,
+        durationMinutes: Int? = nil,
+        locationId: UUID? = nil,
+        locationNameSnapshot: String = "",
+        alertMe: Bool = false,
+        alertOffsetMinutes: Int? = nil,
+        // NEW notify defaults
+        startNotifyEnabled: Bool = false,
+        startNotifyRecipient: NotifyRecipient = .both,
+        startNotifyOffsetMinutes: Int? = nil,
+        finishNotifyEnabled: Bool = false,
+        finishNotifyRecipient: NotifyRecipient = .both,
+        finishNotifyOffsetMinutes: Int? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.childId = childId
+        self.templateId = templateId
+        self.eventTitle = eventTitle
+        self.eventIcon = eventIcon
+        self.helper = helper
+        self.isActive = isActive
+        self.startDate = startDate
+        self.endDate = endDate
+        self.occurrence = occurrence
+        self.weekdays = weekdays.sorted()
+        self.startTime = startTime
+        self.finishTime = finishTime
+        self.durationMinutes = durationMinutes
+        self.locationId = locationId
+        self.locationNameSnapshot = locationNameSnapshot
+        self.alertMe = alertMe
+        self.alertOffsetMinutes = alertOffsetMinutes
+        self.startNotifyEnabled = startNotifyEnabled
+        self.startNotifyRecipient = startNotifyRecipient
+        self.startNotifyOffsetMinutes = startNotifyOffsetMinutes
+        self.finishNotifyEnabled = finishNotifyEnabled
+        self.finishNotifyRecipient = finishNotifyRecipient
+        self.finishNotifyOffsetMinutes = finishNotifyOffsetMinutes
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, childId, templateId
+        case eventTitle, eventIcon, helper, isActive
+        case startDate, endDate, occurrence, weekdays
+        case startTime, finishTime, durationMinutes
+        case locationId, locationNameSnapshot
+        case alertMe, alertOffsetMinutes
+        case startNotifyEnabled, startNotifyRecipient, startNotifyOffsetMinutes
+        case finishNotifyEnabled, finishNotifyRecipient, finishNotifyOffsetMinutes
+        case createdAt, updatedAt
+    }
+}
+
+// MARK: - Reward Requests
+
+enum RewardRequestStatus: String, Codable, Hashable, CaseIterable, Identifiable {
+    case pending
+    case approved
+    case notApproved
+    case claimed
+    var id: String { rawValue }
+
+    /// Child-facing friendly label for status
+    var childDisplay: String {
+        switch self {
+        case .pending: return "Sent to parent"
+        case .approved: return "Approved"
+        case .notApproved: return "Not this time"
+        case .claimed: return "Claimed"
+        }
+    }
+}
+
+/// Child asks for something in exchange for gems; parent may approve with a gem cost.
+/// Claiming is only allowed when approved and the child has enough gems.
+struct RewardRequest: Identifiable, Hashable, Codable {
+    let id: UUID
+    var childId: UUID
+    var title: String
+    var status: RewardRequestStatus
+    var approvedCost: Int? // gems, set by parent upon approval
+
+    // Lifecycle timestamps
+    var requestedAt: Date // when first submitted
+    var approvedAt: Date? // when approved
+    var notApprovedAt: Date? // when marked "Not this time"
+    var claimedAt: Date? // when claimed
+
+    // General bookkeeping
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        childId: UUID,
+        title: String,
+        status: RewardRequestStatus = .pending,
+        approvedCost: Int? = nil,
+        requestedAt: Date = Date(),
+        approvedAt: Date? = nil,
+        notApprovedAt: Date? = nil,
+        claimedAt: Date? = nil,
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.childId = childId
+        self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.status = status
+        self.approvedCost = approvedCost
+        self.requestedAt = requestedAt
+        self.approvedAt = approvedAt
+        self.notApprovedAt = notApprovedAt
+        self.claimedAt = claimedAt
+        self.updatedAt = updatedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, childId, title, status, approvedCost, requestedAt, approvedAt, notApprovedAt, claimedAt, updatedAt
+    }
+}
+
+
+===== ./ReviewRewardRequestView.swift =====
+
+//
+// ReviewRewardRequestView.swift
+// parent_child_checklist
+//
+
+import SwiftUI
+
+struct ReviewRewardRequestView: View, Identifiable {
+    var id: UUID { request.id }
+
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var appState: AppState
+
+    let request: RewardRequest
+
+    @State private var titleText: String
+    @State private var gemCost: Int
+    @State private var showDeleteConfirm = false
+
+    init(request: RewardRequest) {
+        self.request = request
+        _titleText = State(initialValue: request.title)
+        _gemCost = State(initialValue: max(0, request.approvedCost ?? 0))
+    }
+
+    private var childName: String {
+        appState.children.first(where: { $0.id == request.childId })?.name ?? "Child"
+    }
+
+    private var isPending: Bool { request.status == .pending }
+    private var isApprovedOrClaimed: Bool { request.status == .approved || request.status == .claimed }
+
+    private func fmt(_ d: Date?) -> String? {
+        guard let d else { return nil }
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .none
+        return df.string(from: d)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Request") {
+                    HStack {
+                        Text("Child")
+                        Spacer()
+                        Text(childName).foregroundStyle(.secondary)
+                    }
+                    if isPending {
+                        TextField("Title", text: $titleText, axis: .vertical)
+                            .lineLimit(2, reservesSpace: true)
+                            .textInputAutocapitalization(.sentences)
+                            .autocorrectionDisabled(false)
+                    } else {
+                        Text(request.title)
+                            .font(.headline)
+                    }
+                }
+
+                if isPending {
+                    Section("Gem Cost") {
+                        Stepper("Cost: \(gemCost)", value: $gemCost, in: 0...999)
+                        TextField("Enter cost", value: $gemCost, format: .number)
+                            .keyboardType(.numberPad)
+                    }
+                } else if isApprovedOrClaimed, let cost = request.approvedCost {
+                    Section("Gem Cost") {
+                        HStack {
+                            Text("Cost")
+                            Spacer()
+                            Text("💎 \(cost)")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                }
+
+                // Timeline
+                Section("Timeline") {
+                    HStack {
+                        Text("Requested")
+                        Spacer()
+                        Text(fmt(request.requestedAt) ?? "-")
+                            .foregroundStyle(.secondary)
+                    }
+                    if request.status == .approved || request.approvedAt != nil {
+                        HStack {
+                            Text("Approved")
+                            Spacer()
+                            Text(fmt(request.approvedAt) ?? "-")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if request.status == .notApproved || request.notApprovedAt != nil {
+                        HStack {
+                            Text("Not this time")
+                            Spacer()
+                            Text(fmt(request.notApprovedAt) ?? "-")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if request.status == .claimed || request.claimedAt != nil {
+                        HStack {
+                            Text("Claimed")
+                            Spacer()
+                            Text(fmt(request.claimedAt) ?? "-")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Section {
+                    if isPending {
+                        Button {
+                            let trimmed = titleText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            _ = appState.approveRewardRequest(id: request.id, cost: gemCost, newTitle: trimmed)
+                            dismiss()
+                        } label: {
+                            Label("Approve", systemImage: "checkmark.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button {
+                            _ = appState.notApproveRewardRequest(id: request.id)
+                            dismiss()
+                        } label: {
+                            Label("Not this time", systemImage: "hand.raised")
+                        }
+                        .buttonStyle(.bordered)
+                    } else {
+                        Text("This request is \(request.status.childDisplay.lowercased()).")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button(role: .destructive) {
+                        showDeleteConfirm = true
+                    } label: {
+                        Label("Delete Request", systemImage: "trash")
+                    }
+                }
+            }
+            .navigationTitle("Review")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .alert("Delete this request?", isPresented: $showDeleteConfirm) {
+                Button("Delete", role: .destructive) {
+                    _ = appState.deleteRewardRequest(id: request.id)
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This will remove the request.")
+            }
+        }
+    }
+}
+
+
+===== ./CloudKitMapper.swift =====
+
+//
+// CloudKitMapper.swift
+// parent_child_checklist
+//
+// Updated for Photo Evidence (Option A: single CKAsset)
+//
+
+import Foundation
+import CloudKit
+
+// MARK: - CKRecord field helpers
+
+enum CKField {
+    static func uuidString(_ uuid: UUID) -> String { uuid.uuidString }
+    static func uuid(from string: String) -> UUID? { UUID(uuidString: string) }
+}
+
+extension CKRecord {
+
+    // MARK: - Read helpers
+
+    func string(_ key: String) -> String? {
+        self[key] as? String
+    }
+
+    func int(_ key: String) -> Int? {
+        if let n = self[key] as? Int { return n }
+        if let n = self[key] as? NSNumber { return n.intValue }
+        return nil
+    }
+
+    func bool(_ key: String) -> Bool? {
+        if let b = self[key] as? Bool { return b }
+        if let n = self[key] as? NSNumber { return n.boolValue }
+        return nil
+    }
+
+    func date(_ key: String) -> Date? {
+        self[key] as? Date
+    }
+
+    func uuid(_ key: String) -> UUID? {
+        guard let s = string(key) else { return nil }
+        return UUID(uuidString: s)
+    }
+
+    func intArray(_ key: String) -> [Int]? {
+        if let ints = self[key] as? [Int] { return ints }
+        if let nums = self[key] as? [NSNumber] { return nums.map { $0.intValue } }
+        return nil
+    }
+
+    func stringArray(_ key: String) -> [String]? {
+        self[key] as? [String]
+    }
+
+    func asset(_ key: String) -> CKAsset? {
+        self[key] as? CKAsset
+    }
+
+    // MARK: - Write helpers
+
+    func set(_ key: String, _ value: String?) {
+        self[key] = value as CKRecordValue?
+    }
+
+    func set(_ key: String, _ value: Int?) {
+        self[key] = value as CKRecordValue?
+    }
+
+    func set(_ key: String, _ value: Bool?) {
+        self[key] = value as CKRecordValue?
+    }
+
+    func set(_ key: String, _ value: Date?) {
+        self[key] = value as CKRecordValue?
+    }
+
+    func setUUID(_ key: String, _ value: UUID?) {
+        self[key] = value?.uuidString as CKRecordValue?
+    }
+
+    func setIntArray(_ key: String, _ value: [Int]?) {
+        if let value {
+            self[key] = value.map { NSNumber(value: $0) } as CKRecordValue
+        } else {
+            self[key] = nil
+        }
+    }
+
+    func setStringArray(_ key: String, _ value: [String]?) {
+        self[key] = value as CKRecordValue?
+    }
+
+    func setAsset(_ key: String, _ asset: CKAsset?) {
+        self[key] = asset
+    }
+}
+
+// MARK: - Record builders (stable IDs)
+
+enum CKRecordFactory {
+
+    static func makeRecord(type: String, uuid: UUID, zoneID: CKRecordZone.ID) -> CKRecord {
+        let recordID = CKID.recordID(type: type, uuid: uuid, zoneID: zoneID)
+        return CKRecord(recordType: type, recordID: recordID)
+    }
+
+    /// Singletons (FamilyMeta, EmojiLibrary) — fixed recordName in-zone.
+    static func makeSingleton(type: String, recordName: String, zoneID: CKRecordZone.ID) -> CKRecord {
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
+        return CKRecord(recordType: type, recordID: recordID)
+    }
+}
+
+//
+// MARK: - CHILD PROFILE
+//
+
+enum ChildProfileMapper {
+
+    static func toRecord(_ model: ChildProfile, zoneID: CKRecordZone.ID) -> CKRecord {
+        let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.childProfile, uuid: model.id, zoneID: zoneID)
+        r.set(CKSchema.ChildProfile.id, model.id.uuidString)
+        r.set(CKSchema.ChildProfile.name, model.name)
+        r.set(CKSchema.ChildProfile.colorHex, model.colorHex)
+        r.set(CKSchema.ChildProfile.avatarId, model.avatarId)
+        r.set(CKSchema.ChildProfile.updatedAt, Date())
+        return r
+    }
+
+    static func fromRecord(_ r: CKRecord) -> ChildProfile? {
+        let id = (r.uuid(CKSchema.ChildProfile.id))
+            ?? UUID(uuidString: r.recordID.recordName.replacingOccurrences(of: "\(CKSchema.RecordType.childProfile)_", with: ""))
+        guard let id,
+              let name = r.string(CKSchema.ChildProfile.name),
+              let colorHex = r.string(CKSchema.ChildProfile.colorHex)
+        else { return nil }
+
+        let avatarId = r.string(CKSchema.ChildProfile.avatarId)
+        return ChildProfile(id: id, name: name, colorHex: colorHex, avatarId: avatarId)
+    }
+}
+
+//
+// MARK: - TASK TEMPLATE
+//
+
+enum TaskTemplateMapper {
+
+    static func toRecord(_ model: TaskTemplate, zoneID: CKRecordZone.ID) -> CKRecord {
+        let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.taskTemplate, uuid: model.id, zoneID: zoneID)
+        r.set(CKSchema.TaskTemplate.id, model.id.uuidString)
+        r.set(CKSchema.TaskTemplate.title, model.title)
+        r.set(CKSchema.TaskTemplate.iconSymbol, model.iconSymbol)
+        r.set(CKSchema.TaskTemplate.rewardPoints, max(0, model.rewardPoints))
+        r.set(CKSchema.TaskTemplate.createdAt, model.createdAt)
+        return r
+    }
+
+    static func fromRecord(_ r: CKRecord) -> TaskTemplate? {
+        guard let id = r.uuid(CKSchema.TaskTemplate.id),
+              let title = r.string(CKSchema.TaskTemplate.title),
+              let icon = r.string(CKSchema.TaskTemplate.iconSymbol),
+              let createdAt = r.date(CKSchema.TaskTemplate.createdAt)
+        else { return nil }
+
+        let points = max(0, r.int(CKSchema.TaskTemplate.rewardPoints) ?? 1)
+        return TaskTemplate(id: id, title: title, iconSymbol: icon, rewardPoints: points, createdAt: createdAt)
+    }
+}
+
+//
+// MARK: - TASK ASSIGNMENT
+//
+
+enum TaskAssignmentMapper {
+
+    static func toRecord(_ model: TaskAssignment, zoneID: CKRecordZone.ID) -> CKRecord {
+        let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.taskAssignment, uuid: model.id, zoneID: zoneID)
+        r.set(CKSchema.TaskAssignment.id, model.id.uuidString)
+        r.setUUID(CKSchema.TaskAssignment.childId, model.childId)
+        r.setUUID(CKSchema.TaskAssignment.templateId, model.templateId)
+
+        r.set(CKSchema.TaskAssignment.taskTitle, model.taskTitle)
+        r.set(CKSchema.TaskAssignment.taskIcon, model.taskIcon)
+        r.set(CKSchema.TaskAssignment.rewardPoints, max(0, model.rewardPoints))
+
+        r.set(CKSchema.TaskAssignment.helper, model.helper)
+        r.set(CKSchema.TaskAssignment.subtractIfNotCompleted, model.subtractIfNotCompleted)
+        r.set(CKSchema.TaskAssignment.alertMe, model.alertMe)
+        r.set(CKSchema.TaskAssignment.photoEvidenceRequired, model.photoEvidenceRequired)
+        r.set(CKSchema.TaskAssignment.isActive, model.isActive)
+
+        r.set(CKSchema.TaskAssignment.startDate, model.startDate)
+        r.set(CKSchema.TaskAssignment.endDate, model.endDate)
+        r.set(CKSchema.TaskAssignment.occurrence, model.occurrence.rawValue)
+        r.setIntArray(CKSchema.TaskAssignment.weekdays, model.weekdays.sorted())
+
+        r.set(CKSchema.TaskAssignment.startTime, model.startTime)
+        r.set(CKSchema.TaskAssignment.finishTime, model.finishTime)
+        r.set(CKSchema.TaskAssignment.durationMinutes, model.durationMinutes)
+
+        r.setUUID(CKSchema.TaskAssignment.linkedEventAssignmentId, model.linkedEventAssignmentId)
+
+        r.set(CKSchema.TaskAssignment.startNotifyEnabled, model.startNotifyEnabled)
+        r.set(CKSchema.TaskAssignment.startNotifyRecipient, model.startNotifyRecipient.rawValue)
+        r.set(CKSchema.TaskAssignment.startNotifyOffsetMinutes, model.startNotifyOffsetMinutes)
+
+        r.set(CKSchema.TaskAssignment.finishNotifyEnabled, model.finishNotifyEnabled)
+        r.set(CKSchema.TaskAssignment.finishNotifyRecipient, model.finishNotifyRecipient.rawValue)
+        r.set(CKSchema.TaskAssignment.finishNotifyOffsetMinutes, model.finishNotifyOffsetMinutes)
+
+        r.set(CKSchema.TaskAssignment.createdAt, model.createdAt)
+        r.set(CKSchema.TaskAssignment.updatedAt, model.updatedAt)
+
+        return r
+    }
+
+    static func fromRecord(_ r: CKRecord) -> TaskAssignment? {
+        guard let id = r.uuid(CKSchema.TaskAssignment.id),
+              let childId = r.uuid(CKSchema.TaskAssignment.childId),
+              let taskTitle = r.string(CKSchema.TaskAssignment.taskTitle),
+              let taskIcon = r.string(CKSchema.TaskAssignment.taskIcon),
+              let startDate = r.date(CKSchema.TaskAssignment.startDate)
+        else { return nil }
+
+        let occurrenceRaw = r.string(CKSchema.TaskAssignment.occurrence) ?? TaskAssignment.Occurrence.specifiedDays.rawValue
+        let occurrence = TaskAssignment.Occurrence(rawValue: occurrenceRaw) ?? .specifiedDays
+
+        let weekdays = (r.intArray(CKSchema.TaskAssignment.weekdays) ?? [0,1,2,3,4,5,6]).sorted()
+
+        let createdAt = r.date(CKSchema.TaskAssignment.createdAt) ?? Date()
+        let updatedAt = r.date(CKSchema.TaskAssignment.updatedAt) ?? createdAt
+
+        let startEnabled = r.bool(CKSchema.TaskAssignment.startNotifyEnabled) ?? false
+        let startRecipientRaw = r.string(CKSchema.TaskAssignment.startNotifyRecipient) ?? NotifyRecipient.both.rawValue
+        let startRecipient = NotifyRecipient(rawValue: startRecipientRaw) ?? .both
+        let startOffset = r.int(CKSchema.TaskAssignment.startNotifyOffsetMinutes)
+
+        let finishEnabled = r.bool(CKSchema.TaskAssignment.finishNotifyEnabled) ?? false
+        let finishRecipientRaw = r.string(CKSchema.TaskAssignment.finishNotifyRecipient) ?? NotifyRecipient.both.rawValue
+        let finishRecipient = NotifyRecipient(rawValue: finishRecipientRaw) ?? .both
+        let finishOffset = r.int(CKSchema.TaskAssignment.finishNotifyOffsetMinutes)
+
+        return TaskAssignment(
+            id: id,
+            childId: childId,
+            templateId: r.uuid(CKSchema.TaskAssignment.templateId),
+            taskTitle: taskTitle,
+            taskIcon: taskIcon,
+            rewardPoints: max(0, r.int(CKSchema.TaskAssignment.rewardPoints) ?? 0),
+            helper: r.string(CKSchema.TaskAssignment.helper),
+            subtractIfNotCompleted: r.bool(CKSchema.TaskAssignment.subtractIfNotCompleted) ?? false,
+            alertMe: r.bool(CKSchema.TaskAssignment.alertMe) ?? false,
+            photoEvidenceRequired: r.bool(CKSchema.TaskAssignment.photoEvidenceRequired) ?? false,
+            isActive: r.bool(CKSchema.TaskAssignment.isActive) ?? true,
+            startDate: startDate,
+            endDate: r.date(CKSchema.TaskAssignment.endDate),
+            occurrence: occurrence,
+            weekdays: weekdays,
+            startTime: r.date(CKSchema.TaskAssignment.startTime),
+            finishTime: r.date(CKSchema.TaskAssignment.finishTime),
+            durationMinutes: r.int(CKSchema.TaskAssignment.durationMinutes),
+            linkedEventAssignmentId: r.uuid(CKSchema.TaskAssignment.linkedEventAssignmentId),
+            startNotifyEnabled: startEnabled,
+            startNotifyRecipient: startRecipient,
+            startNotifyOffsetMinutes: startOffset,
+            finishNotifyEnabled: finishEnabled,
+            finishNotifyRecipient: finishRecipient,
+            finishNotifyOffsetMinutes: finishOffset,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+}
+
+//
+// MARK: - TASK COMPLETION RECORD (with Photo Evidence)
+//
+
+enum TaskCompletionRecordMapper {
+
+    // MARK: Write (Model → CKRecord)
+    static func toRecord(_ model: TaskCompletionRecord, zoneID: CKRecordZone.ID) -> CKRecord {
+
+        let r = CKRecordFactory.makeRecord(
+            type: CKSchema.RecordType.taskCompletion,
+            uuid: model.id,
+            zoneID: zoneID
+        )
+
+        r.set(CKSchema.TaskCompletionRecord.id, model.id.uuidString)
+        r.setUUID(CKSchema.TaskCompletionRecord.assignmentId, model.assignmentId)
+        r.set(CKSchema.TaskCompletionRecord.day, model.day)
+        r.set(CKSchema.TaskCompletionRecord.completedAt, model.completedAt)
+
+        // NEW: Photo evidence CKAsset
+        if let url = model.photoEvidenceLocalURL {
+            let asset = CKAsset(fileURL: url)
+            r.setAsset(CKSchema.TaskCompletionRecord.photoAsset, asset)
+        } else {
+            r.setAsset(CKSchema.TaskCompletionRecord.photoAsset, nil)
+        }
+
+        return r
+    }
+
+    // MARK: Read (CKRecord → Model)
+    static func fromRecord(_ r: CKRecord) -> TaskCompletionRecord? {
+
+        guard let id = r.uuid(CKSchema.TaskCompletionRecord.id),
+              let assignmentId = r.uuid(CKSchema.TaskCompletionRecord.assignmentId),
+              let day = r.date(CKSchema.TaskCompletionRecord.day)
+        else { return nil }
+
+        let completedAt = r.date(CKSchema.TaskCompletionRecord.completedAt)
+
+        // NEW: Check for asset
+        var localURL: URL? = nil
+        if let asset = r.asset(CKSchema.TaskCompletionRecord.photoAsset) {
+            localURL = asset.fileURL
+        }
+
+        let hasPhoto = (localURL != nil)
+
+        return TaskCompletionRecord(
+            id: id,
+            assignmentId: assignmentId,
+            day: day,
+            completedAt: completedAt,
+            hasPhotoEvidence: hasPhoto,
+            photoEvidenceLocalURL: localURL,
+            photoThumbnailLocalURL: nil
+        )
+    }
+}
+
+//
+// MARK: - TASK COMPLETION LEGACY
+//
+
+// unchanged
+
+
+//
+// MARK: - LOCATION ITEM
+//
+
+enum LocationItemMapper {
+    static func toRecord(_ model: LocationItem, zoneID: CKRecordZone.ID) -> CKRecord {
+        let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.locationItem, uuid: model.id, zoneID: zoneID)
+        r.set(CKSchema.LocationItem.id, model.id.uuidString)
+        r.set(CKSchema.LocationItem.name, model.name)
+        r.set(CKSchema.LocationItem.createdAt, model.createdAt)
+        r.set(CKSchema.LocationItem.updatedAt, model.updatedAt)
+        return r
+    }
+
+    static func fromRecord(_ r: CKRecord) -> LocationItem? {
+        guard let id = r.uuid(CKSchema.LocationItem.id),
+              let name = r.string(CKSchema.LocationItem.name)
+        else { return nil }
+
+        let createdAt = r.date(CKSchema.LocationItem.createdAt) ?? Date()
+        let updatedAt = r.date(CKSchema.LocationItem.updatedAt) ?? createdAt
+        return LocationItem(id: id, name: name, createdAt: createdAt, updatedAt: updatedAt)
+    }
+}
+
+//
+// MARK: - EVENT TEMPLATE
+//
+
+enum EventTemplateMapper {
+
+    static func toRecord(_ model: EventTemplate, zoneID: CKRecordZone.ID) -> CKRecord {
+        let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.eventTemplate, uuid: model.id, zoneID: zoneID)
+        r.set(CKSchema.EventTemplate.id, model.id.uuidString)
+        r.set(CKSchema.EventTemplate.title, model.title)
+        r.set(CKSchema.EventTemplate.iconSymbol, model.iconSymbol)
+        r.set(CKSchema.EventTemplate.createdAt, model.createdAt)
+        r.set(CKSchema.EventTemplate.updatedAt, model.updatedAt)
+        return r
+    }
+
+    static func fromRecord(_ r: CKRecord) -> EventTemplate? {
+        guard let id = r.uuid(CKSchema.EventTemplate.id),
+              let title = r.string(CKSchema.EventTemplate.title),
+              let icon = r.string(CKSchema.EventTemplate.iconSymbol)
+        else { return nil }
+
+        let createdAt = r.date(CKSchema.EventTemplate.createdAt) ?? Date()
+        let updatedAt = r.date(CKSchema.EventTemplate.updatedAt) ?? createdAt
+
+        return EventTemplate(id: id, title: title, iconSymbol: icon, createdAt: createdAt, updatedAt: updatedAt)
+    }
+}
+
+//
+// MARK: - EVENT ASSIGNMENT
+//
+
+enum EventAssignmentMapper {
+
+    static func toRecord(_ model: EventAssignment, zoneID: CKRecordZone.ID) -> CKRecord {
+        let r = CKRecordFactory.makeRecord(type: CKSchema.RecordType.eventAssignment, uuid: model.id, zoneID: zoneID)
+        r.set(CKSchema.EventAssignment.id, model.id.uuidString)
+        r.setUUID(CKSchema.EventAssignment.childId, model.childId)
+        r.setUUID(CKSchema.EventAssignment.templateId, model.templateId)
+
+        r.set(CKSchema.EventAssignment.eventTitle, model.eventTitle)
+        r.set(CKSchema.EventAssignment.eventIcon, model.eventIcon)
+        r.set(CKSchema.EventAssignment.helper, model.helper)
+        r.set(CKSchema.EventAssignment.isActive, model.isActive)
+
+        r.set(CKSchema.EventAssignment.startDate, model.startDate)
+        r.set(CKSchema.EventAssignment.endDate, model.endDate)
+        r.set(CKSchema.EventAssignment.occurrence, model.occurrence.rawValue)
+        r.setIntArray(CKSchema.EventAssignment.weekdays, model.weekdays.sorted())
+
+        r.set(CKSchema.EventAssignment.startTime, model.startTime)
+        r.set(CKSchema.EventAssignment.finishTime, model.finishTime)
+        r.set(CKSchema.EventAssignment.durationMinutes, model.durationMinutes)
+
+        r.setUUID(CKSchema.EventAssignment.locationId, model.locationId)
+        r.set(CKSchema.EventAssignment.locationNameSnapshot, model.locationNameSnapshot)
+
+        r.set(CKSchema.EventAssignment.alertMe, model.alertMe)
+        r.set(CKSchema.EventAssignment.alertOffsetMinutes, model.alertOffsetMinutes)
+
+        r.set(CKSchema.EventAssignment.startNotifyEnabled, model.startNotifyEnabled)
+        r.set(CKSchema.EventAssignment.startNotifyRecipient, model.startNotifyRecipient.rawValue)
+        r.set(CKSchema.EventAssignment.startNotifyOffsetMinutes, model.startNotifyOffsetMinutes)
+
+        r.set(CKSchema.EventAssignment.finishNotifyEnabled, model.finishNotifyEnabled)
+        r.set(CKSchema.EventAssignment.finishNotifyRecipient, model.finishNotifyRecipient.rawValue)
+        r.set(CKSchema.EventAssignment.finishNotifyOffsetMinutes, model.finishNotifyOffsetMinutes)
+
+        r.set(CKSchema.EventAssignment.createdAt, model.createdAt)
+        r.set(CKSchema.EventAssignment.updatedAt, model.updatedAt)
+
+        return r
+    }
+
+    static func fromRecord(_ r: CKRecord) -> EventAssignment? {
+        guard let id = r.uuid(CKSchema.EventAssignment.id),
+              let childId = r.uuid(CKSchema.EventAssignment.childId),
+              let title = r.string(CKSchema.EventAssignment.eventTitle),
+              let icon = r.string(CKSchema.EventAssignment.eventIcon),
+              let startDate = r.date(CKSchema.EventAssignment.startDate)
+        else { return nil }
+
+        let occurrenceRaw = r.string(CKSchema.EventAssignment.occurrence)
+            ?? EventAssignment.Occurrence.specifiedDays.rawValue
+        let occurrence = EventAssignment.Occurrence(rawValue: occurrenceRaw) ?? .specifiedDays
+
+        let weekdays = (r.intArray(CKSchema.EventAssignment.weekdays) ?? [0,1,2,3,4,5,6]).sorted()
+
+        let createdAt = r.date(CKSchema.EventAssignment.createdAt) ?? Date()
+        let updatedAt = r.date(CKSchema.EventAssignment.updatedAt) ?? createdAt
+
+        let startEnabled = r.bool(CKSchema.EventAssignment.startNotifyEnabled) ?? false
+        let startRecipientRaw = r.string(CKSchema.EventAssignment.startNotifyRecipient)
+            ?? NotifyRecipient.both.rawValue
+        let startRecipient = NotifyRecipient(rawValue: startRecipientRaw) ?? .both
+        let startOffset = r.int(CKSchema.EventAssignment.startNotifyOffsetMinutes)
+
+        let finishEnabled = r.bool(CKSchema.EventAssignment.finishNotifyEnabled) ?? false
+        let finishRecipientRaw = r.string(CKSchema.EventAssignment.finishNotifyRecipient)
+            ?? NotifyRecipient.both.rawValue
+        let finishRecipient = NotifyRecipient(rawValue: finishRecipientRaw) ?? .both
+        let finishOffset = r.int(CKSchema.EventAssignment.finishNotifyOffsetMinutes)
+
+        return EventAssignment(
+            id: id,
+            childId: childId,
+            templateId: r.uuid(CKSchema.EventAssignment.templateId),
+            eventTitle: title,
+            eventIcon: icon,
+            helper: r.string(CKSchema.EventAssignment.helper),
+            isActive: r.bool(CKSchema.EventAssignment.isActive) ?? true,
+            startDate: startDate,
+            endDate: r.date(CKSchema.EventAssignment.endDate),
+            occurrence: occurrence,
+            weekdays: weekdays,
+            startTime: r.date(CKSchema.EventAssignment.startTime),
+            finishTime: r.date(CKSchema.EventAssignment.finishTime),
+            durationMinutes: r.int(CKSchema.EventAssignment.durationMinutes),
+            locationId: r.uuid(CKSchema.EventAssignment.locationId),
+            locationNameSnapshot: r.string(CKSchema.EventAssignment.locationNameSnapshot) ?? "",
+            alertMe: r.bool(CKSchema.EventAssignment.alertMe) ?? false,
+            alertOffsetMinutes: r.int(CKSchema.EventAssignment.alertOffsetMinutes),
+            startNotifyEnabled: startEnabled,
+            startNotifyRecipient: startRecipient,
+            startNotifyOffsetMinutes: startOffset,
+            finishNotifyEnabled: finishEnabled,
+            finishNotifyRecipient: finishRecipient,
+            finishNotifyOffsetMinutes: finishOffset,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+}
+
+//
+// MARK: - EMOJI LIBRARY (singleton)
+//
+
+enum EmojiLibraryMapper {
+
+    static let singletonRecordName = "\(CKSchema.RecordType.emojiLibrary)_ROOT"
+
+    static func toRecord(emojis: [String], zoneID: CKRecordZone.ID) -> CKRecord {
+        let r = CKRecordFactory.makeSingleton(
+            type: CKSchema.RecordType.emojiLibrary,
+            recordName: singletonRecordName,
+            zoneID: zoneID
+        )
+        r.setStringArray(CKSchema.EmojiLibrary.emojis, emojis)
+        r.set(CKSchema.EmojiLibrary.updatedAt, Date())
+        return r
+    }
+
+    static func fromRecord(_ r: CKRecord) -> [String] {
+        r.stringArray(CKSchema.EmojiLibrary.emojis) ?? []
+    }
+}
+
+
+===== ./TaskEmojiIconView.swift =====
+
+//
+//  TaskEmojiIconView.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+
+//
+//  TaskEmojiIconView.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+import SwiftUI
+
+/// Emoji-only task icon view.
+/// If `icon` isn't an emoji (e.g., legacy SF Symbol string), shows a safe default ✅.
+struct TaskEmojiIconView: View {
+    let icon: String
+    var size: CGFloat = 24
+
+    private var displayEmoji: String {
+        let t = icon.trimmed
+        return t.containsEmoji ? t : "✅"
+    }
+
+    var body: some View {
+        Text(displayEmoji)
+            .font(.system(size: size))
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+            .frame(width: 40, height: 40)
+            .background(.thinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityLabel("Task icon")
+    }
+}
+
+// MARK: - Emoji Detection + Sanitising Helpers
+
+extension String {
+    /// Simple heuristic to detect emojis (including composed sequences).
+    var containsEmoji: Bool {
+        unicodeScalars.contains { scalar in
+            scalar.properties.isEmojiPresentation || scalar.properties.isEmoji
+        }
+    }
+
+    /// Trims whitespace/newlines and normalises.
+    var trimmed: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// MARK: - Preview
+
+#if DEBUG
+struct TaskEmojiIconView_Previews: PreviewProvider {
+    static var previews: some View {
+        Group {
+            TaskEmojiIconView(icon: "🧹")
+            TaskEmojiIconView(icon: "not-an-emoji")
+            TaskEmojiIconView(icon: "  🍎  ", size: 32)
+        }
+        .previewLayout(.sizeThatFits)
+        .padding()
+        .background(Color(UIColor.systemBackground))
+    }
+}
+#endif
+
+===== ./SelectTaskTemplateView.swift =====
+
+//
+//  SelectTaskTemplateView.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 6/2/2026.
+//
+
+import SwiftUI
+
+struct SelectTaskTemplateView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    /// Currently selected template id (to show a ✔︎)
+    let selectedTemplateId: UUID?
+
+    /// Called when the user picks (or creates/edits and then picks) a template
+    let onPick: (TaskTemplate) -> Void
+
+    @State private var searchText: String = ""
+
+    // New: add/create + edit states
+    @State private var showAddTemplate = false
+    @State private var editingTemplate: TaskTemplate? = nil
+
+    private var templates: [TaskTemplate] {
+        let sorted = appState.taskTemplates.sorted {
+            $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return sorted }
+        return sorted.filter { $0.title.localizedCaseInsensitiveContains(q) }
+    }
+
+    var body: some View {
+        List {
+            if templates.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("No tasks yet.")
+                        .font(.headline)
+                    Text("Tap the + in the top‑right to create your first task template.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 8)
+            } else {
+                ForEach(templates) { tpl in
+                    Button {
+                        onPick(tpl)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 12) {
+                            TaskEmojiIconView(icon: tpl.iconSymbol, size: 22)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(tpl.title)
+                                    .font(.headline)
+
+                                HStack(spacing: 4) {
+                                    Text("💎")
+                                    Text("\(max(0, tpl.rewardPoints))")
+                                        .fontWeight(.semibold)
+                                }
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            if selectedTemplateId == tpl.id {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            editingTemplate = tpl
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button {
+                            editingTemplate = tpl
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        .tint(.blue)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Select Task")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Close") { dismiss() }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showAddTemplate = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.headline)
+                        .accessibilityLabel("New Task Template")
+                }
+            }
+        }
+
+        // NEW: Create flow
+        .sheet(isPresented: $showAddTemplate) {
+            // Expecting editor to call onSaved with the created TaskTemplate
+            AddTaskTemplateView(
+                onSaved: { created in
+                    // Ensure the store is up-to-date (editor typically updates AppState)
+                    onPick(created)
+                    dismiss()
+                },
+                onCancel: {
+                    // No-op; just close the sheet
+                }
+            )
+            .environmentObject(appState)
+        }
+
+        // NEW: Edit flow
+        .sheet(item: $editingTemplate) { tpl in
+            EditTaskTemplateView(
+                template: tpl,
+                onSaved: { updated in
+                    onPick(updated)
+                    dismiss()
+                },
+                onCancel: {
+                    // No-op; just close the sheet
+                }
+            )
+            .environmentObject(appState)
+        }
+    }
+}
+
+
+===== ./EditTaskTemplateView.swift =====
+
+//
+// EditTaskTemplateView.swift
+// parent_child_checklist
+//
+// Created by George Gauci on 10/2/2026.
+//
+
+import SwiftUI
+
+// MARK: - Edit Task Template (Emoji-only picker + My Emojis sheet)
+struct EditTaskTemplateView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let template: TaskTemplate
+
+    // ✅ NEW: Callbacks so the presenting view (e.g., SelectTaskTemplateView) can react
+    var onSaved: ((TaskTemplate) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
+
+    @State private var title: String
+    @State private var selectedEmoji: String
+    @State private var selectedCategory: EmojiCatalog.Category = .all
+    @State private var validationMessage: String? = nil
+    @FocusState private var titleFocused: Bool
+
+    // ✅ Reward points
+    @State private var rewardPoints: Int
+
+    @State private var showMyEmojisSheet = false
+
+    private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
+
+    /// Keep the original convenience while allowing callbacks.
+    init(template: TaskTemplate,
+         onSaved: ((TaskTemplate) -> Void)? = nil,
+         onCancel: (() -> Void)? = nil) {
+        self.template = template
+        self.onSaved = onSaved
+        self.onCancel = onCancel
+        _title = State(initialValue: template.title)
+        _selectedEmoji = State(initialValue: template.iconSymbol)
+        _rewardPoints = State(initialValue: max(0, template.rewardPoints))
+    }
+
+    private var trimmedTitle: String { title.trimmed }
+
+    private var isDuplicate: Bool {
+        !trimmedTitle.isEmpty && appState.isTaskTitleTaken(trimmedTitle, excluding: template.id)
+    }
+
+    private var hasChanges: Bool {
+        trimmedTitle != template.title.trimmed
+        || selectedEmoji != template.iconSymbol
+        || rewardPoints != max(0, template.rewardPoints)
+    }
+
+    private var canSave: Bool {
+        !trimmedTitle.isEmpty && !isDuplicate && selectedEmoji.trimmed.containsEmoji && hasChanges
+    }
+
+    private var baseEmojis: [String] {
+        switch selectedCategory {
+        case .myEmojis:
+            return appState.customEmojis
+        case .all, .morning, .hygiene, .school, .chores, .food, .pets, .sports, .time, .rewards, .health, .outdoors:
+            return EmojiCatalog.emojis(for: selectedCategory)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Task") {
+                    TextField("Title", text: $title)
+                        .focused($titleFocused)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled(true)
+
+                    if isDuplicate {
+                        Text("That task already exists. Please choose a different name.")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    } else if let validationMessage {
+                        Text(validationMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                // ✅ Reward Points UI
+                Section("Reward Points") {
+                    HStack {
+                        Text("💎 Points")
+                        Spacer()
+                        Button {
+                            rewardPoints = max(0, rewardPoints - 1)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .font(.title3)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(rewardPoints == 0)
+                        .accessibilityLabel("Decrease reward points")
+
+                        Text("\(rewardPoints)")
+                            .font(.headline)
+                            .frame(minWidth: 32)
+
+                        Button {
+                            rewardPoints += 1
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title3)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Increase reward points")
+                    }
+                }
+
+                Section("Icon (Emoji)") {
+                    HStack {
+                        Text("Selected")
+                        Spacer()
+                        Text(selectedEmoji.trimmed.containsEmoji ? selectedEmoji : "✅")
+                            .font(.system(size: 32))
+                    }
+
+                    Picker("Category", selection: $selectedCategory) {
+                        ForEach(EmojiCatalog.Category.allCases) { cat in
+                            Text(cat.rawValue).tag(cat)
+                        }
+                    }
+
+                    // Grid of emojis (no search box)
+                    ScrollView {
+                        LazyVGrid(columns: gridColumns, spacing: 10) {
+                            ForEach(baseEmojis, id: \.self) { emoji in
+                                Button {
+                                    selectedEmoji = emoji
+                                    validationMessage = nil
+                                } label: {
+                                    Text(emoji)
+                                        .font(.system(size: 24))
+                                        .frame(maxWidth: .infinity, minHeight: 36)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .fill(selectedEmoji == emoji ? Color.blue.opacity(0.18) : Color.clear)
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .stroke(
+                                                    selectedEmoji == emoji ? Color.blue : Color.secondary.opacity(0.25),
+                                                    lineWidth: selectedEmoji == emoji ? 2 : 1
+                                                )
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(emoji)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(minHeight: 240, maxHeight: 360)
+                    .scrollIndicators(.visible)
+
+                    if selectedCategory == .myEmojis, appState.customEmojis.isEmpty {
+                        Text("No saved emojis yet. Tap “Manage My Emojis” below to add some.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Edit Task")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        onCancel?()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(!canSave)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 0) {
+                    Divider()
+                    Button {
+                        showMyEmojisSheet = true
+                    } label: {
+                        HStack {
+                            Text("Manage My Emojis")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: "chevron.up")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal)
+                    }
+                    .buttonStyle(.plain)
+                    .background(.ultraThinMaterial)
+                }
+            }
+            .sheet(isPresented: $showMyEmojisSheet) {
+                CustomEmojiLibraryView { picked in
+                    selectedEmoji = picked
+                    selectedCategory = .myEmojis
+                }
+                .environmentObject(appState)
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    titleFocused = true
+                }
+            }
+            .onChange(of: title) { _, _ in validationMessage = nil }
+        }
+    }
+
+    private func save() {
+        validationMessage = nil
+
+        guard !trimmedTitle.isEmpty else {
+            validationMessage = "Task title cannot be empty."
+            return
+        }
+        guard !isDuplicate else {
+            validationMessage = "That task already exists. Please choose a different name."
+            return
+        }
+        guard selectedEmoji.trimmed.containsEmoji else {
+            validationMessage = "Please select an emoji."
+            return
+        }
+
+        let points = max(0, rewardPoints)
+        let ok = appState.updateTaskTemplate(
+            id: template.id,
+            newTitle: trimmedTitle,
+            newIconSymbol: selectedEmoji.trimmed,
+            newRewardPoints: points
+        )
+
+        if ok {
+            // Try to fetch the updated template from AppState to pass back
+            if let updated = appState.taskTemplates.first(where: { $0.id == template.id }) {
+                onSaved?(updated)
+            }
+            dismiss()
+        } else {
+            validationMessage = "Couldn’t save changes. Try again."
+        }
+    }
+}
+
+
+===== ./SelectLinkedEventTemplateView.swift =====
+
+//
+//  SelectLinkedEventTemplateView.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 8/2/2026.
+//
+import SwiftUI
+
+/// Bulk linked-event picker for multi-child assignment.
+/// Shows EventTemplates that are valid for ALL selected children:
+/// - match by EventTemplate.id (templateId)
+/// - each selected child must have EXACTLY ONE active, linkable EventAssignment for that template
+struct SelectLinkedEventTemplateView: View {
+    let selectedChildIds: Set<UUID>
+    let minimumStartDate: Date
+
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var selectedTemplateId: UUID?
+    @State private var searchText: String = ""
+
+    // ISO-like calendar (Monday-first) for consistent day-only comparisons
+    private var isoCalendar: Calendar {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = .current
+        return cal
+    }
+
+    private func dayOnly(_ date: Date) -> Date {
+        isoCalendar.startOfDay(for: date)
+    }
+
+    // Monday-first weekday index: 0=Mon ... 6=Sun
+    private func weekdayIndexMondayFirst(for date: Date) -> Int {
+        let weekday = isoCalendar.component(.weekday, from: date)
+        switch weekday {
+        case 2: return 0 // Mon
+        case 3: return 1 // Tue
+        case 4: return 2 // Wed
+        case 5: return 3 // Thu
+        case 6: return 4 // Fri
+        case 7: return 5 // Sat
+        default: return 6 // Sun
+        }
+    }
+
+    /// Returns the next day (start-of-day) on or after `fromDay` that this recurring event occurs.
+    /// If the event doesn't occur anymore (endDate before match), returns nil.
+    private func nextOccurrenceDay(for ev: EventAssignment, onOrAfter fromDay: Date) -> Date? {
+        guard ev.occurrence == .specifiedDays else {
+            return dayOnly(ev.startDate)
+        }
+
+        let startWindow = max(dayOnly(ev.startDate), fromDay)
+        let endWindow = ev.endDate.map(dayOnly)
+
+        if let endWindow, endWindow < startWindow { return nil }
+        if ev.weekdays.isEmpty { return nil }
+
+        // Search up to 14 days for next occurrence
+        for offset in 0..<14 {
+            guard let candidate = isoCalendar.date(byAdding: .day, value: offset, to: startWindow) else { continue }
+            let candDay = dayOnly(candidate)
+            if let endWindow, candDay > endWindow { return nil }
+            let w = weekdayIndexMondayFirst(for: candDay)
+            if ev.weekdays.contains(w) { return candDay }
+        }
+        return nil
+    }
+
+    /// An EventAssignment is linkable iff:
+    /// - active
+    /// - has an occurrence on/after minimumStartDate
+    private func isLinkable(_ ev: EventAssignment) -> Bool {
+        guard ev.isActive else { return false }
+        let minDay = dayOnly(minimumStartDate)
+        switch ev.occurrence {
+        case .onceOnly:
+            return dayOnly(ev.startDate) >= minDay
+        case .specifiedDays:
+            return nextOccurrenceDay(for: ev, onOrAfter: minDay) != nil
+        }
+    }
+
+    /// For a given child + template, return all matching linkable EventAssignments.
+    private func matchingAssignments(childId: UUID, templateId: UUID) -> [EventAssignment] {
+        appState.eventAssignments.filter { ev in
+            ev.childId == childId &&
+            ev.templateId == templateId &&
+            isLinkable(ev)
+        }
+    }
+
+    /// A template is valid in bulk mode iff:
+    /// - every selected child has exactly ONE matching linkable assignment for this template
+    private func isTemplateValidForAllChildren(templateId: UUID) -> Bool {
+        guard !selectedChildIds.isEmpty else { return false }
+        for cid in selectedChildIds {
+            let matches = matchingAssignments(childId: cid, templateId: templateId)
+            if matches.count != 1 { return false }
+        }
+        return true
+    }
+
+    private var validTemplates: [EventTemplate] {
+        let base = appState.eventTemplates.filter { tpl in
+            isTemplateValidForAllChildren(templateId: tpl.id)
+        }
+
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.isEmpty {
+            return base.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        }
+
+        return base
+            .filter { $0.title.localizedCaseInsensitiveContains(q) }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    var body: some View {
+        List {
+            Button {
+                selectedTemplateId = nil
+                dismiss()
+            } label: {
+                HStack {
+                    Text("None")
+                    Spacer()
+                    if selectedTemplateId == nil {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(.tint)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+
+            Section("Events") {
+                if validTemplates.isEmpty {
+                    Text("No events are available for all selected children.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(validTemplates) { tpl in
+                        Button {
+                            selectedTemplateId = tpl.id
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                TaskEmojiIconView(icon: tpl.iconSymbol, size: 22)
+                                Text(tpl.title)
+                                    .font(.headline)
+                                Spacer()
+                                if selectedTemplateId == tpl.id {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tint)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Select Event")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Close") { dismiss() }
+            }
+        }
+    }
+}
+
+
+===== ./CloudKitSchema.swift =====
+
+//
+// CloudKitSchema.swift
+// parent_child_checklist
+//
+// Created by George Gauci on 10/2/2026.
+//
+
+import Foundation
+import CloudKit
+
+/// Central place for all record types + field keys.
+/// Keep this in sync with Models.swift.
+enum CKSchema {
+
+    // MARK: - Zone
+    static let familyZoneName = "FamilyZone"
+
+    // MARK: - Record Types
+    enum RecordType {
+        static let familyMeta       = "FamilyMeta"
+        static let emojiLibrary     = "EmojiLibrary"
+        static let childProfile     = "ChildProfile"
+        static let taskTemplate     = "TaskTemplate"
+        static let taskAssignment   = "TaskAssignment"
+        static let taskCompletion   = "TaskCompletionRecord"
+        static let locationItem     = "LocationItem"
+        static let eventTemplate    = "EventTemplate"
+        static let eventAssignment  = "EventAssignment"
+    }
+
+    // MARK: - Common Fields
+    enum Common {
+        static let id            = "id"            // String UUID
+        static let createdAt     = "createdAt"     // Date
+        static let updatedAt     = "updatedAt"     // Date
+        static let schemaVersion = "schemaVersion" // Int
+    }
+
+    // MARK: - FamilyMeta Fields
+    enum FamilyMeta {
+        static let title         = "title"         // String
+        static let createdAt     = "createdAt"     // Date
+        static let schemaVersion = "schemaVersion" // Int
+    }
+
+    // MARK: - EmojiLibrary Fields
+    enum EmojiLibrary {
+        static let emojis    = "emojis"    // [String]
+        static let updatedAt = "updatedAt" // Date
+    }
+
+    // MARK: - ChildProfile Fields
+    enum ChildProfile {
+        static let id        = Common.id
+        static let name      = "name"      // String
+        static let colorHex  = "colorHex"  // String
+        static let avatarId  = "avatarId"  // String? (store as String, omit if nil)
+        static let updatedAt = Common.updatedAt
+    }
+
+    // MARK: - TaskTemplate Fields
+    enum TaskTemplate {
+        static let id          = Common.id
+        static let title       = "title"       // String
+        static let iconSymbol  = "iconSymbol"  // String
+        static let rewardPoints = "rewardPoints" // Int
+        static let createdAt   = "createdAt"   // Date
+    }
+
+    // MARK: - TaskAssignment Fields
+    enum TaskAssignment {
+        static let id                        = Common.id
+        static let childId                   = "childId" // String UUID
+        static let templateId                = "templateId" // String? UUID
+
+        // Snapshot
+        static let taskTitle                 = "taskTitle" // String
+        static let taskIcon                  = "taskIcon"  // String
+        static let rewardPoints              = "rewardPoints" // Int
+        static let helper                    = "helper" // String?
+
+        // Options
+        static let subtractIfNotCompleted    = "subtractIfNotCompleted" // Bool
+        static let alertMe                   = "alertMe" // Bool
+        static let photoEvidenceRequired     = "photoEvidenceRequired" // Bool
+        static let isActive                  = "isActive" // Bool
+
+        // Dates
+        static let startDate                 = "startDate" // Date
+        static let endDate                   = "endDate"   // Date?
+
+        // Schedule
+        static let occurrence                = "occurrence" // String rawValue
+        static let weekdays                  = "weekdays"   // [Int] as [NSNumber]
+
+        // Time windows
+        static let startTime                 = "startTime"  // Date?
+        static let finishTime                = "finishTime" // Date?
+
+        // Duration
+        static let durationMinutes           = "durationMinutes" // Int?
+
+        // Linked event
+        static let linkedEventAssignmentId   = "linkedEventAssignmentId" // String? UUID
+
+        // NEW: Notify (Start)
+        static let startNotifyEnabled        = "startNotifyEnabled" // Bool
+        static let startNotifyRecipient      = "startNotifyRecipient" // String (NotifyRecipient.rawValue)
+        static let startNotifyOffsetMinutes  = "startNotifyOffsetMinutes" // Int?
+
+        // NEW: Notify (Finish)
+        static let finishNotifyEnabled       = "finishNotifyEnabled" // Bool
+        static let finishNotifyRecipient     = "finishNotifyRecipient" // String (NotifyRecipient.rawValue)
+        static let finishNotifyOffsetMinutes = "finishNotifyOffsetMinutes" // Int?
+
+        // Audit
+        static let createdAt                 = Common.createdAt
+        static let updatedAt                 = Common.updatedAt
+    }
+
+    // MARK: - TaskCompletionRecord Fields
+    enum TaskCompletionRecord {
+        static let id          = Common.id
+        static let assignmentId = "assignmentId" // String UUID
+        static let day         = "day"          // Date (start-of-day)
+        static let completedAt = "completedAt"  // Date?
+        // NEW (Option A): single CKAsset for full-size photo evidence
+        static let photoAsset  = "photoAsset"   // CKAsset?
+    }
+
+    // MARK: - LocationItem Fields
+    enum LocationItem {
+        static let id        = Common.id
+        static let name      = "name"      // String
+        static let createdAt = Common.createdAt
+        static let updatedAt = Common.updatedAt
+    }
+
+    // MARK: - EventTemplate Fields
+    enum EventTemplate {
+        static let id         = Common.id
+        static let title      = "title"      // String
+        static let iconSymbol = "iconSymbol" // String
+        static let createdAt  = Common.createdAt
+        static let updatedAt  = Common.updatedAt
+    }
+
+    // MARK: - EventAssignment Fields
+    enum EventAssignment {
+        static let id                        = Common.id
+        static let childId                   = "childId" // String UUID
+        static let templateId                = "templateId" // String? UUID
+
+        // Snapshot
+        static let eventTitle                = "eventTitle" // String
+        static let eventIcon                 = "eventIcon"  // String
+        static let helper                    = "helper"     // String?
+        static let isActive                  = "isActive"   // Bool
+
+        // Schedule
+        static let startDate                 = "startDate" // Date
+       

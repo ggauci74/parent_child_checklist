@@ -1,0 +1,1812 @@
+                .contextMenu {
+                                    Button(role: .destructive) {
+                                        prepareSingleDelete(emoji)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+
+                        // Small discoverability hint beneath the grid
+                        Text("Tip: Long‑press an emoji to delete it.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 8)
+                            .padding(.horizontal)
+                            .padding(.bottom, 12)
+                    }
+                }
+            }
+            .navigationTitle("My Emojis")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            // MARK: - Clear All confirmation
+            .alert("Delete all saved emojis?", isPresented: $showClearAllConfirm) {
+                Button("Delete All", role: .destructive) {
+                    appState.deleteAllCustomEmojis()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                let inUse = appState.countCustomEmojisInUse()
+                let total = appState.customEmojis.count
+                if inUse > 0 {
+                    Text("This will remove \(total) saved emojis.\n\(inUse) of them are used by templates. Deleting won’t change any existing tasks or events.")
+                } else {
+                    Text("This will remove \(total) saved emojis. Deleting won’t change any existing tasks or events.")
+                }
+            }
+            // MARK: - Single delete confirmation (when in use)
+            .alert("Delete this emoji?", isPresented: $showSingleDeleteConfirm, presenting: emojiPendingDelete) { emoji in
+                Button("Delete", role: .destructive) {
+                    if let e = emojiPendingDelete {
+                        appState.deleteCustomEmoji(e)
+                        emojiPendingDelete = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    emojiPendingDelete = nil
+                }
+            } message: { _ in
+                if let msg = singleDeleteUsageMessage {
+                    Text(msg)
+                } else {
+                    Text("This will remove the emoji from your saved list. Deleting won’t change any existing tasks or events.")
+                }
+            }
+        }
+    }
+
+    // MARK: - Actions
+    private func addEmoji() {
+        message = nil
+        let t = inputEmoji.trimmed
+        guard !t.isEmpty else {
+            message = "Please paste an emoji."
+            return
+        }
+        guard t.containsEmoji else {
+            message = "That doesn’t look like an emoji."
+            return
+        }
+        guard !appState.isCustomEmojiTaken(t) else {
+            message = "That emoji is already saved."
+            return
+        }
+        let ok = appState.addCustomEmoji(t)
+        if ok {
+            inputEmoji = ""
+            message = "Added ✅ Tap an emoji below to use it."
+        } else {
+            message = "Couldn’t add that emoji. Try again."
+        }
+    }
+
+    /// Initiates single-emoji deletion. If the emoji is used in templates, ask for confirmation.
+    private func prepareSingleDelete(_ emoji: String) {
+        let usage = appState.emojiUsage(emoji)
+        if usage.tasks > 0 || usage.events > 0 {
+            // Build a friendly usage message
+            var parts: [String] = []
+            if usage.tasks > 0 { parts.append("\(usage.tasks) task template\(usage.tasks == 1 ? "" : "s")") }
+            if usage.events > 0 { parts.append("\(usage.events) event template\(usage.events == 1 ? "" : "s")") }
+            let joined = parts.joined(separator: " and ")
+            singleDeleteUsageMessage =
+            """
+            This emoji is used in \(joined).
+            Deleting won’t change any existing tasks or events, but you won’t be able to select it again in those templates unless you save it here again.
+            """
+            emojiPendingDelete = emoji
+            showSingleDeleteConfirm = true
+        } else {
+            // Not used anywhere — delete immediately
+            appState.deleteCustomEmoji(emoji)
+        }
+    }
+}
+
+
+
+===== ./PointsHistoryView.swift =====
+
+//
+// PointsHistoryView.swift
+// parent_child_checklist
+//
+// Read-only ledger history for a child:
+// - Shows current balance at the top
+// - Shows last N days (matches AppState.ledgerWindowDays)
+// - Adds a "Balance carried forward" snapshot item at cutoff when older entries existed
+// - Coalesces bursty manual adjustments (±1 taps) into a single display row
+// - Shows task titles for completed/un-ticked entries
+// - Shows reward titles for claimed entries
+// - The small subtitle row places the time first, then the item title (if any)
+//
+
+import SwiftUI
+
+struct PointsHistoryView: View {
+    let childId: UUID
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    // How tightly to group manual +/- taps into one display row
+    private let burstWindow: TimeInterval = 60 // seconds
+
+    // How far to look around a .redeemed points entry to match the claimed RewardRequest (title)
+    private let rewardMatchWindow: TimeInterval = 5 * 60 // 5 minutes
+
+    private var child: ChildProfile? {
+        appState.children.first(where: { $0.id == childId })
+    }
+
+    private var cutoffDay: Date {
+        let days = appState.ledgerWindowDays
+        let now = Date()
+        let date = Calendar.current.date(byAdding: .day, value: -days, to: now) ?? now
+        return Calendar.current.startOfDay(for: date)
+    }
+
+    // Raw recent entries (>= cutoff), newest first by day then createdAt
+    private var recentEntriesRaw: [PointsEntry] {
+        appState.pointsLedger
+            .filter { $0.childId == childId && Calendar.current.startOfDay(for: $0.day) >= cutoffDay }
+            .sorted {
+                let d0 = Calendar.current.startOfDay(for: $0.day)
+                let d1 = Calendar.current.startOfDay(for: $1.day)
+                if d0 != d1 { return d0 > d1 }            // newer day first
+                return $0.createdAt > $1.createdAt        // newer within day first
+            }
+    }
+
+    // Whether there was older history (before cutoff).
+    private var hadOlderHistory: Bool {
+        appState.pointsLedger.contains { $0.childId == childId && Calendar.current.startOfDay(for: $0.day) < cutoffDay }
+    }
+
+    // Display model (coalesced)
+    private struct DisplayRow: Identifiable, Equatable {
+        let id = UUID()
+        let day: Date
+        let createdAt: Date
+        let delta: Int
+        let reason: PointsReason
+        let assignmentId: UUID?
+        let isSnapshot: Bool
+        let coalescedCount: Int  // how many raw entries make up this display row
+        // Optional resolved titles
+        let taskTitle: String?
+        let rewardTitle: String?
+    }
+
+    private struct DayGroup: Identifiable {
+        let id = UUID()
+        let day: Date
+        let rows: [DisplayRow]
+    }
+
+    private var groupedDisplay: [DayGroup] {
+        // 1) group raw entries by day (newest day first)
+        let dict = Dictionary(grouping: recentEntriesRaw, by: { Calendar.current.startOfDay(for: $0.day) })
+        let days = dict.keys.sorted(by: >)
+
+        // 2) for each day, coalesce manual bursts and map to DisplayRow
+        return days.map { day in
+            let items = dict[day]!.sorted(by: { $0.createdAt > $1.createdAt }) // newest first
+
+            var rows: [DisplayRow] = []
+            rows.reserveCapacity(items.count)
+
+            for e in items {
+                let snapshotFlag = isSnapshot(e, cutoffDay: cutoffDay)
+                // Resolve titles
+                let resolvedTaskTitle: String? = e.assignmentId.flatMap { aid in
+                    appState.taskAssignments.first(where: { $0.id == aid })?.taskTitle
+                }
+                let resolvedRewardTitle: String? = (e.reason == .redeemed) ? findClaimedRewardTitle(matching: e) : nil
+
+                if let last = rows.last,
+                   // Coalesce only when both are manualAdjust, same day, close in time
+                   last.reason == .manualAdjust,
+                   e.reason == .manualAdjust,
+                   Calendar.current.isDate(last.day, inSameDayAs: day),
+                   abs(last.createdAt.timeIntervalSince(e.createdAt)) <= burstWindow {
+                    // Merge into the last row: sum delta, keep latest createdAt (last), keep any titles (none for manual)
+                    let merged = DisplayRow(
+                        day: last.day,
+                        createdAt: last.createdAt,
+                        delta: last.delta + e.delta,
+                        reason: .manualAdjust,
+                        assignmentId: nil,
+                        isSnapshot: last.isSnapshot, // should be false for manual entries
+                        coalescedCount: last.coalescedCount + 1,
+                        taskTitle: nil,
+                        rewardTitle: nil
+                    )
+                    rows[rows.count - 1] = merged
+                } else {
+                    // New row
+                    rows.append(DisplayRow(
+                        day: day,
+                        createdAt: e.createdAt,
+                        delta: e.delta,
+                        reason: e.reason,
+                        assignmentId: e.assignmentId,
+                        isSnapshot: snapshotFlag,
+                        coalescedCount: 1,
+                        taskTitle: resolvedTaskTitle,
+                        rewardTitle: resolvedRewardTitle
+                    ))
+                }
+            }
+
+            return DayGroup(day: day, rows: rows)
+        }
+    }
+
+    // Current balance text
+    private var balanceText: String {
+        String(appState.childPointsTotal(childId: childId))
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // Balance summary at top
+                Section {
+                    HStack(spacing: 10) {
+                        Text("💎")
+                            .font(.system(size: 24))
+                        Text(balanceText)
+                            .font(.system(size: 24, weight: .bold))
+                        Spacer()
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Current balance")
+                    .accessibilityValue(balanceText)
+                }
+
+                // If there was older history but the compactor didn’t insert a snapshot (net 0),
+                // show a neutral "carried forward 0" line so the cutoff is obvious.
+                if hadOlderHistory && !groupedDisplay.contains(where: { group in
+                    group.rows.contains(where: { $0.isSnapshot })
+                }) {
+                    Section {
+                        HStack {
+                            Text("Balance carried forward")
+                            Spacer()
+                            Text("💎 0")
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.subheadline)
+                    } footer: {
+                        Text("Older history summarized at \(formatDate(cutoffDay)).")
+                    }
+                }
+
+                // Render grouped sections
+                ForEach(groupedDisplay) { group in
+                    Section(header: Text(sectionHeader(group.day))) {
+                        ForEach(group.rows) { row in
+                            historyRow(row)
+                        }
+                    }
+                }
+
+                if groupedDisplay.isEmpty && !hadOlderHistory {
+                    Section {
+                        Text("No history yet.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("\(child?.name ?? "Child") — History")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+
+    // MARK: - Row View
+
+    @ViewBuilder
+    private func historyRow(_ row: DisplayRow) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            // LEFT: Reason + subtitle (time first, then item title)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(reasonText(row))
+                    .font(.subheadline)
+
+                if let subtitle = subtitleText(row) {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            // RIGHT: Delta
+            Text(deltaText(row.delta))
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(row.delta >= 0 ? .green : .red)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(reasonText(row)), \(deltaText(row.delta))")
+    }
+
+    // MARK: - Snapshot detection
+
+    private func isSnapshot(_ e: PointsEntry, cutoffDay: Date) -> Bool {
+        // Heuristic: compactor creates `.manualAdjust` at cutoff with assignmentId == nil
+        return e.reason == .manualAdjust
+            && Calendar.current.isDate(e.day, inSameDayAs: cutoffDay)
+            && Calendar.current.isDate(e.createdAt, inSameDayAs: cutoffDay)
+            && e.assignmentId == nil
+    }
+
+    // MARK: - Reason + subtitle + delta formatting
+
+    private func reasonText(_ row: DisplayRow) -> String {
+        if row.isSnapshot { return "Balance carried forward" }
+
+        switch row.reason {
+        case .manualAdjust:
+            return "Manual adjust"
+
+        case .redeemed:
+            return "Reward claimed"
+
+        case .missedPenalty:
+            return "Missed task penalty"
+
+        case .completed:
+            return row.delta >= 0 ? "Task completed" : "Task un-ticked"
+        }
+    }
+
+    /// Subtitle: "{time}  •  {item title (if any)}"
+    private func subtitleText(_ row: DisplayRow) -> String? {
+        // No subtitle for snapshot (it is pinned to cutoff)
+        if row.isSnapshot { return "as at \(formatDate(row.day))" }
+
+        let timeStr = formatTime(row.createdAt)
+
+        // Decide which item title to show (task or reward)
+        if row.reason == .completed, let t = row.taskTitle, !t.trimmed.isEmpty {
+            return "\(timeStr) • \(t)"
+        }
+        if row.reason == .redeemed, let r = row.rewardTitle, !r.trimmed.isEmpty {
+            return "\(timeStr) • \(r)"
+        }
+        // Otherwise just time
+        return timeStr
+    }
+
+    private func deltaText(_ delta: Int) -> String {
+        let sign = delta >= 0 ? "+" : "–"
+        return "\(sign)\(abs(delta))"
+    }
+
+    private func sectionHeader(_ date: Date) -> String {
+        formatDate(date)
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .none
+        return df.string(from: date)
+    }
+
+    private func formatTime(_ date: Date) -> String {
+        let tf = DateFormatter()
+        tf.dateStyle = .none
+        tf.timeStyle = .short
+        return tf.string(from: date)
+    }
+
+    // MARK: - Reward title resolver
+
+    /// Best-effort match of a `.redeemed` ledger entry to a claimed RewardRequest to display its title.
+    /// Matches by same child, absolute delta == approvedCost, and claimedAt within ±rewardMatchWindow of createdAt.
+    private func findClaimedRewardTitle(matching entry: PointsEntry) -> String? {
+        let absCost = abs(entry.delta)
+        let created = entry.createdAt
+
+        // Candidate claimed requests for this child with same cost
+        let candidates = appState.rewardRequests.filter {
+            $0.childId == childId &&
+            ($0.status == .claimed || $0.claimedAt != nil) &&
+            ($0.approvedCost ?? 0) == absCost
+        }
+
+        // Pick the one with closest claimedAt to the ledger entry timestamp within the time window
+        var best: (req: RewardRequest, diff: TimeInterval)? = nil
+        for req in candidates {
+            guard let ct = req.claimedAt else { continue }
+            let diff = abs(ct.timeIntervalSince(created))
+            if diff <= rewardMatchWindow {
+                if best == nil || diff < best!.diff {
+                    best = (req, diff)
+                }
+            }
+        }
+        return best?.req.title
+    }
+}
+
+
+===== ./FamilyCoordinator.swift =====
+
+//
+//  FamilyCoordinator.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+
+import Foundation
+import CloudKit
+
+/// Implements your "Approach B":
+/// - Data lives in a single zone named FamilyZone
+/// - If a shared family exists, use SHARED DB
+/// - Else if private family exists, use PRIVATE DB
+/// - Else create FamilyZone + FamilyMeta in PRIVATE DB (this user becomes owner by creation)
+final class FamilyCoordinator {
+
+    enum FamilyState {
+        case shared(context: FamilyContext)
+        case privateOwner(context: FamilyContext)
+    }
+
+    struct FamilyContext: Equatable {
+        let database: CloudKitService.DatabaseKind
+        let zoneID: CKRecordZone.ID
+        let familyMetaRecordID: CKRecord.ID
+    }
+
+    private let ck: CloudKitService
+
+    init(ck: CloudKitService) {
+        self.ck = ck
+    }
+
+    /// Main bootstrap entry.
+    func bootstrapFamily() async throws -> FamilyState {
+
+        // 1) Shared DB: find any shared zone named "FamilyZone" and see if it contains FamilyMeta.
+        if let sharedContext = try await findSharedFamilyContext() {
+            return .shared(context: sharedContext)
+        }
+
+        // 2) Private DB: ensure zone exists, then find/create FamilyMeta
+        let privateZoneID = try await ck.ensureFamilyZoneInPrivate()
+
+        if let meta = try await ck.fetchFirst(recordType: CKSchema.RecordType.familyMeta, zoneID: privateZoneID, from: .private) {
+            return .privateOwner(context: FamilyContext(
+                database: .private,
+                zoneID: privateZoneID,
+                familyMetaRecordID: meta.recordID
+            ))
+        }
+
+        // 3) Create FamilyMeta in private (owner by creation)
+        let meta = try await createFamilyMeta(in: privateZoneID, to: .private)
+        return .privateOwner(context: FamilyContext(
+            database: .private,
+            zoneID: privateZoneID,
+            familyMetaRecordID: meta.recordID
+        ))
+    }
+
+    // MARK: - Shared detection
+
+    /// Shared DB can contain zones owned by another iCloud user.
+    /// We detect a family by scanning shared zones whose zoneName == FamilyZoneName,
+    /// then checking for a FamilyMeta record inside that zone.
+    private func findSharedFamilyContext() async throws -> FamilyContext? {
+        let zones = try await ck.fetchAllZones(in: .shared)
+        let familyZones = zones.filter { $0.zoneID.zoneName == CKSchema.familyZoneName }
+
+        for zone in familyZones {
+            if let meta = try await ck.fetchFirst(recordType: CKSchema.RecordType.familyMeta, zoneID: zone.zoneID, from: .shared) {
+                return FamilyContext(
+                    database: .shared,
+                    zoneID: zone.zoneID,
+                    familyMetaRecordID: meta.recordID
+                )
+            }
+        }
+        return nil
+    }
+
+    // MARK: - FamilyMeta creation
+
+    private func createFamilyMeta(in zoneID: CKRecordZone.ID, to db: CloudKitService.DatabaseKind) async throws -> CKRecord {
+
+        // Use a stable ID so repeated bootstrap doesn't create duplicates.
+        let recordID = CKRecord.ID(recordName: "\(CKSchema.RecordType.familyMeta)_ROOT", zoneID: zoneID)
+        let record = CKRecord(recordType: CKSchema.RecordType.familyMeta, recordID: recordID)
+
+        // Populate minimal metadata
+        record[CKSchema.Common.id] = UUID().uuidString as CKRecordValue
+        record[CKSchema.FamilyMeta.title] = "Family" as CKRecordValue
+        record[CKSchema.FamilyMeta.createdAt] = Date() as CKRecordValue
+        record[CKSchema.FamilyMeta.schemaVersion] = 1 as CKRecordValue
+
+        return try await ck.save(record, to: db)
+    }
+}
+
+
+===== ./AddTaskTemplateView.swift =====
+
+//
+// AddTaskTemplateView.swift
+// parent_child_checklist
+//
+// Created by George Gauci on 10/2/2026.
+//
+
+import SwiftUI
+
+// MARK: - Add Task Template (Emoji-only picker + My Emojis sheet)
+struct AddTaskTemplateView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    // NEW: Callbacks so the presenting view (e.g., SelectTaskTemplateView) can react
+    var onSaved: ((TaskTemplate) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
+
+    @State private var title: String = ""
+    @State private var selectedEmoji: String? = nil
+    @State private var selectedCategory: EmojiCatalog.Category = .all
+    @State private var validationMessage: String? = nil
+    @FocusState private var titleFocused: Bool
+
+    // ✅ Reward points (default 1)
+    @State private var rewardPoints: Int = 1
+
+    // Sheet
+    @State private var showMyEmojisSheet = false
+
+    private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
+
+    private var trimmedTitle: String { title.trimmed }
+
+    private var isDuplicate: Bool {
+        !trimmedTitle.isEmpty && appState.isTaskTitleTaken(trimmedTitle)
+    }
+
+    private var canSave: Bool {
+        !trimmedTitle.isEmpty && !isDuplicate && (selectedEmoji != nil)
+    }
+
+    private var baseEmojis: [String] {
+        switch selectedCategory {
+        case .myEmojis:
+            return appState.customEmojis
+        case .all, .morning, .hygiene, .school, .chores, .food, .pets, .sports, .time, .rewards, .health, .outdoors:
+            return EmojiCatalog.emojis(for: selectedCategory)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Task") {
+                    TextField("Title", text: $title)
+                        .focused($titleFocused)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled(true)
+
+                    if isDuplicate {
+                        Text("That task already exists. Please choose a different name.")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    } else if let validationMessage {
+                        Text(validationMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                // ✅ Reward Points UI
+                Section("Reward Points") {
+                    HStack {
+                        Text("💎 Points")
+                        Spacer()
+                        Button {
+                            rewardPoints = max(0, rewardPoints - 1)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .font(.title3)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(rewardPoints == 0)
+                        .accessibilityLabel("Decrease reward points")
+
+                        Text("\(rewardPoints)")
+                            .font(.headline)
+                            .frame(minWidth: 32)
+
+                        Button {
+                            rewardPoints += 1
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title3)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Increase reward points")
+                    }
+                }
+
+                Section("Icon (Emoji)") {
+                    HStack {
+                        Text("Selected")
+                        Spacer()
+                        if let selectedEmoji {
+                            Text(selectedEmoji).font(.system(size: 32))
+                        } else {
+                            Text("—").foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Picker("Category", selection: $selectedCategory) {
+                        ForEach(EmojiCatalog.Category.allCases) { cat in
+                            Text(cat.rawValue).tag(cat)
+                        }
+                    }
+
+                    // Grid of emojis (no search box)
+                    ScrollView {
+                        LazyVGrid(columns: gridColumns, spacing: 10) {
+                            ForEach(baseEmojis, id: \.self) { emoji in
+                                Button {
+                                    selectedEmoji = emoji
+                                    validationMessage = nil
+                                } label: {
+                                    Text(emoji)
+                                        .font(.system(size: 24))
+                                        .frame(maxWidth: .infinity, minHeight: 36)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .fill(selectedEmoji == emoji ? Color.blue.opacity(0.18) : Color.clear)
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .stroke(
+                                                    selectedEmoji == emoji ? Color.blue : Color.secondary.opacity(0.25),
+                                                    lineWidth: selectedEmoji == emoji ? 2 : 1
+                                                )
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(emoji)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(minHeight: 240, maxHeight: 360)
+                    .scrollIndicators(.visible)
+
+                    if selectedCategory == .myEmojis, appState.customEmojis.isEmpty {
+                        Text("No saved emojis yet. Tap “Manage My Emojis” below to add some.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Add Task")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        onCancel?()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(!canSave)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                // Bottom button (keeps main UI clean)
+                VStack(spacing: 0) {
+                    Divider()
+                    Button {
+                        showMyEmojisSheet = true
+                    } label: {
+                        HStack {
+                            Text("Manage My Emojis")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: "chevron.up")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal)
+                    }
+                    .buttonStyle(.plain)
+                    .background(.ultraThinMaterial)
+                }
+            }
+            .sheet(isPresented: $showMyEmojisSheet) {
+                CustomEmojiLibraryView { picked in
+                    selectedEmoji = picked
+                    // Convenience: switch category to My Emojis after picking
+                    selectedCategory = .myEmojis
+                }
+                .environmentObject(appState)
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    titleFocused = true
+                }
+            }
+            .onChange(of: title) { _, _ in validationMessage = nil }
+        }
+    }
+
+    private func save() {
+        validationMessage = nil
+        guard !trimmedTitle.isEmpty else {
+            validationMessage = "Please enter a task title."
+            return
+        }
+        guard !isDuplicate else {
+            validationMessage = "That task already exists. Please choose a different name."
+            return
+        }
+        guard let emoji = selectedEmoji, !emoji.trimmed.isEmpty else {
+            validationMessage = "Please select an emoji."
+            return
+        }
+        let points = max(0, rewardPoints)
+
+        // Change: capture the created template and pass it back via onSaved
+        if let created = appState.createTaskTemplate(title: trimmedTitle,
+                                                     iconSymbol: emoji,
+                                                     rewardPoints: points) {
+            onSaved?(created)
+            dismiss()
+        } else {
+            validationMessage = "Couldn’t create task. Please try again."
+        }
+    }
+}
+
+
+===== ./PhotoEvidenceViewer.swift =====
+
+//
+//  PhotoEvidenceViewer.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 24/2/2026.
+//
+
+
+//
+// PhotoEvidenceViewer.swift
+// parent_child_checklist
+//
+// Full‑screen viewer for a completion’s photo evidence.
+// Shows a simple, reliable preview using the locally cached CKAsset file URL.
+// If the URL is not yet available but the record indicates a photo exists,
+// we show a friendly “downloading” message so the parent can retry shortly.
+//
+
+import SwiftUI
+import UIKit
+
+struct PhotoEvidenceViewer: View, Identifiable {
+    // Use completion id for .sheet(item:) presentation
+    var id: UUID { completion.id }
+
+    let completion: TaskCompletionRecord
+    /// Optional, purely for a nice inline title (e.g., task name).
+    let taskTitle: String
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var uiImage: UIImage? = nil
+    @State private var loadError: String?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                Group {
+                    if let image = uiImage {
+                        GeometryReader { geo in
+                            // Simple, performant full-screen preview
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: geo.size.width, height: geo.size.height)
+                                .clipped()
+                        }
+                    } else if let err = loadError {
+                        // Friendly, readable message for the parent
+                        Text(err)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.white)
+                            .padding()
+                    } else {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle(taskTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .onAppear { loadImageIfAvailable() }
+        }
+    }
+
+    // MARK: - Loader
+    private func loadImageIfAvailable() {
+        // If CloudKit has already cached the asset, the local file URL will be present.
+        // Otherwise, CloudKit will fetch it on-demand soon and AppState/mapper will yield a URL later.
+        guard let url = completion.photoEvidenceLocalURL else {
+            if completion.hasPhotoEvidence {
+                loadError = "Photo is downloading from iCloud… try again in a moment."
+            } else {
+                loadError = "No photo attached to this completion."
+            }
+            return
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            if let img = UIImage(data: data) {
+                uiImage = img
+            } else {
+                loadError = "Couldn’t read image data."
+            }
+        } catch {
+            loadError = "Couldn’t load image file."
+        }
+    }
+}
+
+===== ./ChildHomeView.swift =====
+
+//
+// ChildHomeView.swift
+//
+import SwiftUI
+import UIKit
+
+// MARK: - Theme (colors used across the scene)
+private enum FuturistTheme {
+    static let skyTop = Color(red: 0.02, green: 0.06, blue: 0.16) // #05102A (deep/navy blue)
+    static let skyBottom = Color(red: 0.01, green: 0.03, blue: 0.10) // #02081A
+    static let neonAqua = Color(red: 0.20, green: 0.95, blue: 1.00) // #33F0FF (bright blue/cyan)
+    static let neonAquaDim = Color(red: 0.20, green: 0.95, blue: 1.00).opacity(0.32)
+    static let gridLine = Color(red: 0.20, green: 0.95, blue: 1.00).opacity(0.30)
+    static let pillar = Color(red: 0.20, green: 0.95, blue: 1.00).opacity(0.10)
+
+    // Cards
+    static let surface = Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+    static let surfaceSolid = Color(red: 0.05, green: 0.10, blue: 0.22)
+
+    // Text
+    static let textPrimary = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary = Color(red: 0.63, green: 0.73, blue: 0.82)
+
+    // Section title (Option C frost)
+    static let sectionTitleFrost = Color(red: 0.92, green: 0.97, blue: 1.00)
+}
+
+// MARK: - Reusable card background with micro-elevation
+private struct CardBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    var cornerRadius: CGFloat = 12
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(reduceTransparency ? FuturistTheme.surfaceSolid : FuturistTheme.surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 2)
+    }
+}
+
+// MARK: - Subtle lower sweep gradient to anchor the content area
+private struct LowerContentSweep: View {
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: .clear, location: 0.00),
+                .init(color: FuturistTheme.skyTop.opacity(0.05), location: 0.50),
+                .init(color: FuturistTheme.skyTop.opacity(0.08), location: 1.00)
+            ]),
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Custom gradient rule between rows
+/// 2pt, rounded, center-bright gradient line (dark → bright → dark).
+/// Drawn on a full-width basis with identical paddings so Tasks & Events match exactly.
+private struct TaskRowGradientRule: View {
+    var leadingInset: CGFloat
+    var trailingInset: CGFloat
+    var thickness: CGFloat = 2
+
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 0.00),
+                .init(color: FuturistTheme.neonAqua,             location: 0.50),
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 1.00),
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(height: thickness)
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading) // full-row basis
+        .padding(.leading, leadingInset)                 // same paddings in both sections
+        .padding(.trailing, trailingInset)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - ChildHomeView
+struct ChildHomeView: View {
+    let childId: UUID
+
+    @AppStorage("userRole") private var userRoleRawValue: String?
+    @AppStorage("selectedChildId") private var selectedChildIdRaw: String?
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    private let nameFontSize: CGFloat = 36
+
+    private var isoCalendar: Calendar {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = .current
+        return cal
+    }
+    private func dayOnly(_ date: Date) -> Date { isoCalendar.startOfDay(for: date) }
+
+    private var todayDay: Date { dayOnly(Date()) }
+    private var yesterdayDay: Date { isoCalendar.date(byAdding: .day, value: -1, to: todayDay) ?? todayDay }
+    private var tomorrowDay: Date { isoCalendar.date(byAdding: .day, value: 1, to: todayDay) ?? todayDay }
+
+    @State private var selectedDate: Date = Date()
+    private var selectedDay: Date { dayOnly(selectedDate) }
+
+    private enum RelativeDay { case yesterday, today, tomorrow }
+    private var relativeSelection: RelativeDay {
+        if selectedDay == todayDay { return .today }
+        if selectedDay == yesterdayDay { return .yesterday }
+        if selectedDay == tomorrowDay { return .tomorrow }
+        return .today
+    }
+    private var isTodayView: Bool { relativeSelection == .today }
+    private var canGoBack: Bool { relativeSelection != .yesterday }
+    private var canGoForward: Bool { relativeSelection != .tomorrow }
+
+    private func goLeft() {
+        switch relativeSelection {
+        case .today: selectedDate = yesterdayDay
+        case .tomorrow: selectedDate = todayDay
+        case .yesterday: break
+        }
+    }
+    private func goRight() {
+        switch relativeSelection {
+        case .today: selectedDate = tomorrowDay
+        case .yesterday: selectedDate = todayDay
+        case .tomorrow: break
+        }
+    }
+    private func clampSelectionToAllowed() {
+        if !(selectedDay == yesterdayDay || selectedDay == todayDay || selectedDay == tomorrowDay) {
+            selectedDate = todayDay
+        }
+    }
+
+    private var child: ChildProfile? {
+        appState.children.first { $0.id == childId }
+    }
+
+    private var currentDateText: String {
+        let df = DateFormatter()
+        df.calendar = isoCalendar
+        df.locale = .current
+        df.dateFormat = "EEEE, yyyy MMMM d"
+        return df.string(from: selectedDay)
+    }
+
+    private var listTitleText: String {
+        switch relativeSelection {
+        case .yesterday: return "Yesterday’s List"
+        case .today: return "Today’s List"
+        case .tomorrow: return "Tomorrow’s List"
+        }
+    }
+
+    private var pointsValue: Int {
+        appState.childPointsTotal(childId: childId)
+    }
+
+    private func effectiveTime(_ task: TaskAssignment) -> Date? { task.startTime ?? task.finishTime }
+    private func effectiveTime(_ event: EventAssignment) -> Date? { event.startTime ?? event.finishTime }
+    private func timeKey(_ time: Date?) -> Int? {
+        guard let time else { return nil }
+        let components = isoCalendar.dateComponents([.hour, .minute], from: time)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+
+    private var tasksForSelectedDayAll: [TaskAssignment] {
+        appState.assignments(for: childId, on: selectedDay)
+    }
+    private var eventsForSelectedDayAll: [EventAssignment] {
+        appState.events(for: childId, on: selectedDay)
+    }
+
+    private var standaloneTimedTasks: [TaskAssignment] {
+        tasksForSelectedDayAll
+            .filter { effectiveTime($0) != nil }
+            .sorted { a, b in
+                let ta = timeKey(effectiveTime(a)) ?? Int.max
+                let tb = timeKey(effectiveTime(b)) ?? Int.max
+                if ta != tb { return ta < tb }
+                return a.taskTitle.localizedCaseInsensitiveCompare(b.taskTitle) == .orderedAscending
+            }
+    }
+    private var standaloneUntimedTasks: [TaskAssignment] {
+        tasksForSelectedDayAll
+            .filter { effectiveTime($0) == nil }
+            .sorted { a, b in
+                a.taskTitle.localizedCaseInsensitiveCompare(b.taskTitle) == .orderedAscending
+            }
+    }
+    private var timedEvents: [EventAssignment] {
+        eventsForSelectedDayAll
+            .filter { effectiveTime($0) != nil }
+            .sorted { a, b in
+                let ta = timeKey(effectiveTime(a)) ?? Int.max
+                let tb = timeKey(effectiveTime(b)) ?? Int.max
+                if ta != tb { return ta < tb }
+                return a.eventTitle.localizedCaseInsensitiveCompare(b.eventTitle) == .orderedAscending
+            }
+    }
+    private var untimedEvents: [EventAssignment] {
+        eventsForSelectedDayAll
+            .filter { effectiveTime($0) == nil }
+            .sorted { a, b in
+                a.eventTitle.localizedCaseInsensitiveCompare(b.eventTitle) == .orderedAscending
+            }
+    }
+
+    private var earliestStandaloneTaskKey: Int? {
+        standaloneTimedTasks.compactMap { timeKey(effectiveTime($0)) }.min()
+    }
+
+    private var earliestEventBlockKey: Int? {
+        let perEventEarliest: [Int] = eventsForSelectedDayAll.compactMap { ev in
+            var keys: [Int] = []
+            if let k = timeKey(effectiveTime(ev)) { keys.append(k) }
+            return keys.min()
+        }
+        return perEventEarliest.min()
+    }
+
+    private enum AgendaSection: Hashable { case tasks, events }
+
+    // ✅ Fixed version (no 'const', explicit unwraps)
+    private var agendaSectionOrder: [AgendaSection] {
+        if timedEvents.isEmpty { return [.tasks, .events] }
+        if !timedEvents.isEmpty && standaloneTimedTasks.isEmpty && !standaloneUntimedTasks.isEmpty {
+            return [.events, .tasks]
+        }
+
+        let t = earliestStandaloneTaskKey   // Int?
+        let e = earliestEventBlockKey       // Int?
+
+        if t == nil && e == nil { return [.tasks, .events] }
+        if let tUnwrapped = t, let eUnwrapped = e {
+            return (tUnwrapped <= eUnwrapped) ? [.tasks, .events] : [.events, .tasks]
+        }
+        if t != nil { return [.tasks, .events] }
+        return [.events, .tasks]
+    }
+
+    private let swipeThreshold: CGFloat = 60
+    private let verticalTolerance: CGFloat = 40
+
+    @State private var avatarToastMessage: String? = nil
+    @State private var showPhotoChoice = false
+    @State private var showCameraPicker = false
+    @State private var showLibraryPicker = false
+    @State private var pendingPhotoAssignment: TaskAssignment? = nil
+    @State private var pickedImage: UIImage? = nil
+    @State private var completionToPreview: TaskCompletionRecord? = nil
+    @State private var viewerTaskTitle: String = ""
+    @State private var showUncompleteConfirm: Bool = false
+    @State private var pendingUncompleteAssignmentId: UUID? = nil
+    @State private var pendingUncompleteTaskTitle: String = ""
+
+    var body: some View {
+        NavigationStack {
+            ZZZBackgroundAndContent
+        }
+    }
+
+    // Extracted for readability
+    private var ZZZBackgroundAndContent: some View {
+        ZStack(alignment: .top) {
+            // Background
+            CurvyAquaBlueBackground(animate: true)
+
+            // Content
+            VStack(spacing: 0) {
+                if let child = child {
+                    ChildHeaderView(
+                        child: child,
+                        points: pointsValue
+                    )
+                    .padding(.horizontal)
+
+                    Text(listTitleText)
+                        .font(.system(size: nameFontSize, weight: .regular))
+                        .foregroundStyle(FuturistTheme.textPrimary)
+                        .padding(.top, 2)
+
+                    HStack(spacing: 12) {
+                        ChipArrowButton(
+                            systemName: "chevron.backward.circle.fill",
+                            action: { goLeft() },
+                            disabled: !canGoBack
+                        )
+                        .accessibilityLabel(relativeSelection == .today ? "Go to Yesterday" : "Go to Previous Day")
+
+                        Text(currentDateText)
+                            .font(.subheadline)
+                            .foregroundStyle(FuturistTheme.textSecondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+
+                        ChipArrowButton(
+                            systemName: "chevron.forward.circle.fill",
+                            action: { goRight() },
+                            disabled: !canGoForward
+                        )
+                        .accessibilityLabel(relativeSelection == .today ? "Go to Tomorrow" : "Go to Next Day")
+                    }
+                    .padding(.top, 6)
+
+                    selectedDayContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    childNotFoundView
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 10, coordinateSpace: .local)
+                    .onEnded { value in
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        if abs(dy) > verticalTolerance && abs(dy) > abs(dx) { return }
+                        if dx < -swipeThreshold, canGoForward { goRight() }
+                        else if dx > swipeThreshold, canGoBack { goLeft() }
+                    }
+            )
+
+            if let msg = avatarToastMessage {
+                ToastBannerView(message: msg)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(10)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .avatarUpdated)) { _ in
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                avatarToastMessage = "Avatar updated"
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    avatarToastMessage = nil
+                }
+            }
+        }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(true)
+        .onAppear {
+            selectedDate = dayOnly(Date())
+            clampSelectionToAllowed()
+        }
+        .sheet(item: $completionToPreview) { comp in
+            PhotoEvidenceViewer(
+                completion: comp,
+                taskTitle: viewerTaskTitle
+            )
+        }
+        .confirmationDialog(
+            "Attach Photo",
+            isPresented: $showPhotoChoice,
+            titleVisibility: .visible
+        ) {
+            Button("Take Photo") { showCameraPicker = true }
+            Button("Choose from Library") { showLibraryPicker = true }
+            Button("Cancel", role: .cancel) { pendingPhotoAssignment = nil }
+        } message: {
+            Text("A photo is required to complete this task.")
+        }
+        .sheet(isPresented: $showCameraPicker) {
+            ImagePicker(sourceType: .camera) { image in
+                handlePickedPhoto(image)
+            }
+        }
+        .sheet(isPresented: $showLibraryPicker) {
+            ImagePicker(sourceType: .photoLibrary) { image in
+                handlePickedPhoto(image)
+            }
+        }
+        .alert("Un‑complete task?", isPresented: $showUncompleteConfirm) {
+            Button("Remove Photo & Un‑complete", role: .destructive) {
+                if let id = pendingUncompleteAssignmentId {
+                    appState.toggleCompletion(assignmentId: id, on: selectedDay)
+                }
+                pendingUncompleteAssignmentId = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingUncompleteAssignmentId = nil
+            }
+        } message: {
+            Text("This will mark “\(pendingUncompleteTaskTitle)” as not done and remove the attached photo.")
+        }
+    }
+
+    private var selectedDayContent: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                LowerContentSweep()
+                agendaList
+            }
+            Button("Switch Role (Temporary)") {
+                userRoleRawValue = nil
+                selectedChildIdRaw = nil
+            }
+            .font(.footnote)
+            .foregroundStyle(.red)
+            .padding(.bottom, 20)
+        }
+    }
+
+    // MARK: - TASKS + EVENTS LIST (identical dividers; precise vertical offset)
+    @ViewBuilder
+    private var agendaList: some View {
+        let orderedStandaloneTasks = standaloneTimedTasks + standaloneUntimedTasks
+        let orderedEvents = timedEvents + untimedEvents
+
+        if orderedStandaloneTasks.isEmpty && orderedEvents.isEmpty {
+            VStack {
+                Spacer()
+                Text("No tasks or events assigned for this day.")
+                    .foregroundStyle(FuturistTheme.textSecondary)
+                Spacer()
+            }
+        } else {
+            List {
+                ForEach(agendaSectionOrder, id: \.self) { section in
+                    switch section {
+                    case .tasks:
+                        if !orderedStandaloneTasks.isEmpty {
+                            Section {
+                                ForEach(Array(orderedStandaloneTasks.enumerated()), id: \.element.id) { index, assignment in
+                                    let completion = appState.completionRecord(for: assignment.id, on: selectedDay)
+
+                                    // Wrapper gets extra bottom padding (Option A)
+                                    VStack(spacing: 0) {
+                                        SharedTaskAssignmentRow(
+                                            assignment: assignment,
+                                            selectedDate: selectedDay,
+                                            isCompleted: completion != nil,
+                                            onToggleComplete: {
+                                                guard isTodayView else { return }
+                                                handleToggleComplete(assignment)
+                                            },
+                                            completionForSelectedDay: completion,
+                                            onViewPhoto: {
+                                                guard let comp = completion, comp.hasPhotoEvidence else { return }
+                                                viewerTaskTitle = assignment.taskTitle
+                                                completionToPreview = comp
+                                            },
+                                            isInteractive: isTodayView
+                                        )
+                                    }
+                                    .padding(.bottom, Self.ruleExtraBottomPadding)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(CardBackground())
+
+                                    // Divider — identical paddings with a precise vertical offset
+                                    .overlay(alignment: .bottomLeading) {
+                                        if index < orderedStandaloneTasks.count - 1 {
+                                            TaskRowGradientRule(
+                                                leadingInset: Self.ruleLeadingInset,
+                                                trailingInset: Self.ruleTrailingInset,
+                                                thickness: 2
+                                            )
+                                            .offset(y: Self.ruleVerticalOffset) // << control height here
+                                        }
+                                    }
+                                }
+                            } header: {
+                                Text("Tasks")
+                                    .foregroundStyle(FuturistTheme.sectionTitleFrost)
+                                    .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 1)
+                                    .textCase(nil)
+                                    .padding(.top, Self.headerTopPadding)
+                                    .padding(.bottom, Self.headerBottomPadding)
+                            }
+                        }
+
+                    case .events:
+                        if !orderedEvents.isEmpty {
+                            Section {
+                                ForEach(Array(orderedEvents.enumerated()), id: \.element.id) { index, event in
+                                    // Wrapper gets extra bottom padding (Option A)
+                                    VStack(spacing: 0) {
+                                        SharedEventAssignmentRow(event: event)
+                                    }
+                                    .padding(.bottom, Self.ruleExtraBottomPadding)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(CardBackground())
+
+                                    // Divider — identical paddings with the same vertical offset
+                                    .overlay(alignment: .bottomLeading) {
+                                        if index < orderedEvents.count - 1 {
+                                            TaskRowGradientRule(
+                                                leadingInset: Self.ruleLeadingInset,
+                                                trailingInset: Self.ruleTrailingInset,
+                                                thickness: 2
+                                            )
+                                            .offset(y: Self.ruleVerticalOffset) // << control height here
+                                        }
+                                    }
+                                }
+                            } header: {
+                                Text("Events")
+                                    .foregroundStyle(FuturistTheme.sectionTitleFrost)
+                                    .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 1)
+                                    .textCase(nil)
+                                    .padding(.top, Self.eventsHeaderTopPadding)   // << tighten just Events
+                                    .padding(.bottom, Self.headerBottomPadding)
+                            }
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .listStyle(.insetGrouped)
+            .modifier(CompactSectionSpacingIfAvailable()) // iOS 17+: compact section spacing; no-op on earlier iOS
+            .environment(\.defaultMinListHeaderHeight, 0)
+        }
+    }
+
+    // MARK: - Tunable metrics for the custom rule & headers
+    /// Horizontal start: align under the left icon/radio column.
+    private static let ruleLeadingInset: CGFloat = 16
+    /// Horizontal end: align under the trailing gem/right cluster.
+    private static let ruleTrailingInset: CGFloat = 14
+    /// Extra internal bottom padding so the divider appears lower (applied to WRAPPER).
+    private static let ruleExtraBottomPadding: CGFloat = 6
+    /// ✅ Precise vertical offset for the divider capsule (positive = further down)
+    private static let ruleVerticalOffset: CGFloat = 6
+
+    /// Section title spacing (above/below)
+    private static let headerTopPadding: CGFloat = 6
+    private static let headerBottomPadding: CGFloat = 4
+    /// Tighter top padding used ONLY for the Events header to pull it closer to Tasks.
+    private static let eventsHeaderTopPadding: CGFloat = 2
+
+    private var childNotFoundView: some View {
+        VStack {
+            Spacer()
+            Text("That child profile can’t be found.")
+                .foregroundStyle(FuturistTheme.textSecondary)
+            Spacer()
+            Button("Back") {
+                userRoleRawValue = nil
+                selectedChildIdRaw = nil
+            }
+            .foregroundStyle(.secondary)
+            .padding(.bottom, 12)
+        }
+    }
+}
+
+// MARK: - Photo evidence helpers (unchanged)
+private extension ChildHomeView {
+    func handleToggleComplete(_ assignment: TaskAssignment) {
+        guard isTodayView else { return }
+        if let comp = appState.completionRecord(for: assignment.id, on: selectedDay) {
+            if comp.hasPhotoEvidence {
+                pendingUncompleteAssignmentId = assignment.id
+                pendingUncompleteTaskTitle = assignment.taskTitle
+                showUncompleteConfirm = true
+            } else {
+                appState.toggleCompletion(assignmentId: assignment.id, on: selectedDay)
+            }
+            return
+        }
+        if assignment.photoEvidenceRequired {
+            pendingPhotoAssignment = assignment
+            showPhotoChoice = true
+        } else {
+            appState.toggleCompletion(assignmentId: assignment.id, on: selectedDay)
+        }
+    }
+
+    func handlePickedPhoto(_ image: UIImage?) {
+        defer {
+            showCameraPicker = false
+            showLibraryPicker = false
+        }
+        guard let image, let assignment = pendingPhotoAssignment else {
+            pendingPhotoAssignment = nil
+            return
+        }
+        appState.completeTaskWithPhoto(assignmentId: assignment.id, on: selectedDay, image: image)
+        pendingPhotoAssignment = nil
+        pickedImage = nil
+    }
+}
+
+// MARK: - Blue Chip Arrow Button (present/next-day controls)
+private struct ChipArrowButton: View {
+    let systemName: String
+    let action: () -> Void
+    let disabled: Bool
+
+    var body: some View {
+        Button(action: { if !disabled { action() } }) {
+            Image(systemName: systemName)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, Color.accentColor)
+                .font(.title3)
+                .frame(width: 44, height: 44)
+                .background(Color.accentColor.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .opacity(disabled ? 0.45 : 1.0)
+        .disabled(disabled)
+    }
+}
+
+// MARK: - UIKit Image Picker
+private struct ImagePicker: UIViewControllerRepresentable {
+    enum Source { case camera, photoLibrary }
+
+    let sourceType: Source
+    var onImagePicked: (UIImage?) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onImagePicked: onImagePicked) }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        switch sourceType {
+        case .camera:
+            picker.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
+        case .photoLibrary:
+            picker.sourceType = .photoLibrary
+        }
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) { }
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        private let onPicked: (UIImage?) -> Void
+        init(onImagePicked: @escaping (UIImage?) -> Void) { self.onPicked = onImagePicked }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            onPicked(nil)
+            picker.dismiss(animated: true)
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            let image = info[.originalImage] as? UIImage
+            onPicked(image)
+            picker.dismiss(animated: true)
+        }
+    }
+}
+
+// MARK: - Utilities
+/// Applies compact section spacing on iOS 17+, does nothing on earlier OS versions.
+private struct CompactSectionSpacingIfAvailable: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 17.0, *) {
+            content.listSectionSpacing(.compact)
+        } else {
+            content
+        }
+    }
+}
+
+
+===== ./AvatarCatalog.swift =====
+
+//
+// AvatarCatalog.swift
+// parent_child_checklist
+//
+// Static, bundled avatar catalog (image assets).
+//
+
+import Foundation
+
+enum AvatarCatalog {
+    struct Avatar: Identifiable, Hashable {
+        let id: String               // stable ID stored in ChildProfile.avatarId
+        let displayName: String      // shown in UI / VoiceOver
+        let assetName: String        // name of the image in Assets.xcassets
+    }
+
+    /// Current catalog (4 to start; add 12 more later).
+    static let all: [Avatar] = [
+        Avatar(id: "lizard_scout",      displayName: "Lizard",   assetName: "avatar_lizard"),
+        Avatar(id: "panda_hoodie",      displayName: "Panda",    assetName: "avatar_panda"),
+        Avatar(id: "octopus_coral",     displayName: "Octopus",  assetName: "avatar_octopus"),
+        Avatar(id: "ladybird_cityleaf", displayName: "Ladybird", assetName: "avatar_ladybird"),
+    ]
+
+    /// Returns a matching avatar or a neutral placeholder descriptor.
+    static func avatar(for id: String?) -> Avatar {
+        guard let id, let found = all.first(where: { $0.id == id }) else {
+            // Placeholder record when no avatar is chosen yet
+            return Avatar(id: "__none__", displayName: "Not chosen yet", assetName: "")
+        }
+        return found
+    }
+}
+
+
+===== ./ParentRewardsTabView.swift =====
+
+//
+// ParentRewardsTabView.swift
+// parent_child_checklist
+//
+// Parent Requests area with scalable filtering:
+// - Balances section
+// - Status segmented filter: Pending | Approved | Claimed
+// - Child filter picker: All Children or a specific child
+// - Search on request title + child name
+// - Results grouped by child for easy scanning
+//
+// Updated: Inline, larger custom title (same line as trailing toolbar item).
+//
+
+import SwiftUI
+
+struct ParentRewardsTabView: View {
+    @EnvironmentObject private var appState: AppState
+
+    // Review sheet
+    @State private var selected: RewardRequest? = nil
+
+    // Toast (errors only)
+    @State private var localToastMessage: String? = nil
+    @State private var lastToastAt: Date = .distantPast
+
+    // History sheet
+    @State private var historyChild: ChildProfile? = nil
+
+    // MARK: - Filters
+    private enum StatusScope: String, CaseIterable, Identifiable {
+        case pending = "Pending"
+        case approved = "Approved"
+        case claimed = "Claimed"
+        var id: String { rawValue }
+    }
+    @State private var selectedStatus: StatusScope = .pending
+    @State private var selectedChildId: UUID? = nil // nil = All Children
+
+    // MARK: - Search
+    @State private var searchText: String = ""
+
+    // MARK: - Counts for segmented labels
+    private var pendingCount: Int { appState.rewardRequests.filter { $0.status == .pending }.count }
+    private var approvedCount: Int { appState.rewardRequests.filter { $0.status == .approved }.count }
+    private var claimedCount: Int { appState.rewardRequests.filter { $0.status == .claimed }.count }
+    private var notApprovedCount: Int { appState.rewardRequests.filter { $0.status == .notApproved }.count }
+
+    // MARK: - Status-scoped requests
+    private var statusScopedRequests: [RewardRequest] {
+        appState.rewardRequests.filter { req in
+            switch selectedStatus {
+            case .pending:  return req.status == .pending
+            case .approved: return req.status == .approved
+            case .claimed:  return req.status == .claimed
+            }
+        }
+    }
+
+    // MARK: - Child filter
+    private var childScopedRequests: [RewardRequest] {
+        guard let childId = selectedChildId else { return statusScopedRequests }
+        return statusScopedRequests.filter { $0.childId == childId }
+    }
+
+    // MARK: - Search (title + child name), AFTER status + child filters
+    private var searchScopedRequests: [RewardRequest] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return childScopedRequests }
+        return childScopedRequests.filter { req in
+            req.title.localizedCaseInsensitiveContains(q)
+            || childName(req.childId).localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    // MARK: - Sort within status
+    private var sortedRequests: [RewardRequest] {
+        switch selectedStatus {
+        case .pending:
+            // newest requested first
+            return searchScopedRequests.sorted { $0.requestedAt > $1.requestedAt }
+        case .approved:
+            // newest approved first (fallback updatedAt)
+            return searchScopedRequests.sorted {
+                let a = $0.approvedAt ?? $0.updatedAt
+                let b = $1.approvedAt ?? $1.updatedAt
+                return a > b
+            }
+        case .claimed:
+            // newest claimed first (fallback updatedAt)
+            return searchScopedRequests.sorted {
+                let a = $0.claimedAt ?? $0.updatedAt
+                let b = $1.claimedAt ?? $1.updatedAt
+                return a > b
+            }
+        }
+    }
+
+    // Group by child for display
+    private var groupedByChild: [(child: ChildProfile?, requests: [RewardRequest])] {
+        let dict = Dictionary(grouping: sortedRequests, by: { $0.childId })
+        // sort child groups by child name (A→Z)
+        let sortedKeys = dict.keys.sorted {
+            childName($0).localizedCaseInsensitiveCompare(childName($1)) == .orderedAscending
+        }
+        return sortedKeys.map { key in
+            let child = appState.children.first(where: { $0.id == key })
+            return (child, dict[key] ?? [])
+        }
+    }
+
+    // MARK: - Body
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                List {
+                    // 🔹 Balances
+                    balancesSection
+
+                    // 🔹 Filters row
+                    filtersHeader
+
+                    // 🔹 Results area
+                    if sortedRequests.isEmpty {
+                        Section {
+                            Text(emptyStateText)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        ForEach(groupedByChild, id: \.child?.id) { group in
+                            Section(header: Text(childHeaderText(group.child))) {
+                                ForEach(group.requests) { req in
+                                    buttonRow(for: req)
+                                }
+                                .onDelete { indexSet in
+                                    // enable delete via swipe on filtered list
+                                    let subset = group.requests
+                                    for idx in indexSet {
+                                        _ = appState.deleteRewardRequest(id: subset[idx].id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .listStyle(.insetGrouped)
+
+                // Sheets
+                .sheet(item: $selected) { req in
+                    ReviewRewardRequestView(request: req)
+                        .environmentObject(appState)
+                }
+                .sheet(item: $historyChild) { child in
+                    PointsHistoryView(childId: child.id)
+                        .environmentObject(appState)
+                }
+                .sheet(isPresented: $showNotApprovedSheet) {
+                    NotApprovedListView(
+                        requests: appState.rewardRequests
+                            .filter { $0.status == .notApproved }
+                            .sorted { ($0.notApprovedAt ?? $0.updatedAt) > ($1.notApprovedAt ?? $1.updatedAt) },
+                        childName: { id in childName(id) },
+                        onOpen: { selected = $0 },
+                        onDelete: { _ = appState.deleteRewardRequest(id: $0.id) }
+                    )
+                    .environmentObject(appState)
+                }
+
+                // Title, toolbar, search
+                .navigationBarTitleDisplayMode(.inline) // inline so title & menu share one row
+                .toolbar {
+                    // Larger inline title (adjust size as needed; 32 matches your other screens)
+                    ToolbarItem(placement: .principal) {
+                        Text("Requests")
+                            .font(.system(size: 32, weight: .bold, design: .default))
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    // Trailing menu / actions
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            if notApprovedCount > 0 {
+                                Button {
+                                    showNotApprovedSheet.toggle()
+                                } label: {
+                                    Label("View “Not this time” (\(notApprovedCount))", systemImage: "eye")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .font(.headline)
+                        }
+                        .accessibilityLabel("More")
+                    }
+                }
+                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
+                .navigationTitle("") // hidden because the principal title is shown
+                .onAppear {
+                    // Keep your rolling window compaction behaviour
+                    appState.compactLedgerRollingWindow()
+                }
+
+                if let localToastMessage {
+                    ToastBannerView(message: localToastMessage)
+                        .transition(

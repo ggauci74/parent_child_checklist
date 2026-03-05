@@ -1,25 +1,32 @@
+//
+// AvatarCatalog.swift
+// parent_child_checklist
+//
+// Static, bundled avatar catalog (image assets).
+//
+
 import Foundation
 
 enum AvatarCatalog {
     struct Avatar: Identifiable, Hashable {
-        let id: String
-        let displayName: String
-        let emoji: String
+        let id: String               // stable ID stored in ChildProfile.avatarId
+        let displayName: String      // shown in UI / VoiceOver
+        let assetName: String        // name of the image in Assets.xcassets
     }
 
-    /// Preset avatar list. Swap emojis for image assets later without changing stored IDs.
+    /// Current catalog (4 to start; add 12 more later).
     static let all: [Avatar] = [
-        Avatar(id: "astronaut", displayName: "Astronaut", emoji: "👩‍🚀"),
-        Avatar(id: "ninja", displayName: "Ninja", emoji: "🥷"),
-        Avatar(id: "cat", displayName: "Cat", emoji: "🐱"),
-        Avatar(id: "dog", displayName: "Dog", emoji: "🐶"),
-        Avatar(id: "unicorn", displayName: "Unicorn", emoji: "🦄"),
-        Avatar(id: "robot", displayName: "Robot", emoji: "🤖")
+        Avatar(id: "lizard_scout",      displayName: "Lizard",   assetName: "avatar_lizard"),
+        Avatar(id: "panda_hoodie",      displayName: "Panda",    assetName: "avatar_panda"),
+        Avatar(id: "octopus_coral",     displayName: "Octopus",  assetName: "avatar_octopus"),
+        Avatar(id: "ladybird_cityleaf", displayName: "Ladybird", assetName: "avatar_ladybird"),
     ]
 
+    /// Returns a matching avatar or a neutral placeholder descriptor.
     static func avatar(for id: String?) -> Avatar {
         guard let id, let found = all.first(where: { $0.id == id }) else {
-            return Avatar(id: "__none__", displayName: "Not chosen yet", emoji: "👤")
+            // Placeholder record when no avatar is chosen yet
+            return Avatar(id: "__none__", displayName: "Not chosen yet", assetName: "")
         }
         return found
     }

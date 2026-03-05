@@ -1,0 +1,1733 @@
+
+
+===== ./GlowParticleBackground.swift =====
+
+//
+//  GlowParticleBackground.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 26/2/2026.
+//
+
+
+import SwiftUI
+
+struct GlowParticleBackground: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var time: CGFloat = 0
+    @State private var shootingStarActive = false
+    @State private var shootingStarOffset = CGSize.zero
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let now = timeline.date.timeIntervalSinceReferenceDate
+            let t = reduceMotion ? 0 : CGFloat(now)
+
+            Canvas { context, size in
+
+                // ============ 1) BASE NEBULA GRADIENT ============
+                let nebula = Gradient(colors: [
+                    Color(red: 0.02, green: 0.05, blue: 0.16),   // deep navy
+                    Color(red: 0.10, green: 0.02, blue: 0.20),   // purple tint
+                    Color(red: 0.02, green: 0.03, blue: 0.08)    // near-black
+                ])
+
+                context.fill(
+                    Path(CGRect(origin: .zero, size: size)),
+                    with: .linearGradient(
+                        nebula,
+                        startPoint: CGPoint(x: 0, y: 0),
+                        endPoint: CGPoint(x: 0, y: size.height)
+                    )
+                )
+
+                // ============ 2) FLOATING GLOW CLOUDS ============
+                let glowColors = [
+                    Color.cyan.opacity(0.18),
+                    Color.blue.opacity(0.08),
+                    Color.purple.opacity(0.10)
+                ]
+
+                for i in 0..<3 {
+                    let cx = size.width * (0.3 + 0.4 * CGFloat(i))
+                    let cy = size.height * (0.3 + 0.2 * CGFloat(sin(t * 0.1 + CGFloat(i))))
+
+                    let rect = CGRect(
+                        x: cx - 200,
+                        y: cy - 200,
+                        width: 400,
+                        height: 400
+                    )
+
+                    context.fill(
+                        Path(ellipseIn: rect),
+                        with: .radialGradient(
+                            Gradient(colors: [glowColors[i], .clear]),
+                            center: CGPoint(x: rect.midX, y: rect.midY),
+                            startRadius: 10,
+                            endRadius: 200
+                        )
+                    )
+                }
+
+                // ============ 3) TWINKLING PARTICLES ============
+                let particleCount = 160
+                let seed: CGFloat = 9123
+
+                for i in 0..<particleCount {
+                    let fx = frac(sin(CGFloat(i) * 12.15 + seed) * 45234.204)
+                    let fy = frac(sin(CGFloat(i) * 73.91 + seed) * 91234.112)
+
+                    let x = fx * size.width
+                    let y = fy * size.height
+
+                    let twinkle = 0.4 + 0.6 * abs(sin(t * 1.5 + fx * 12 + fy * 9))
+
+                    let r = 0.8 + frac(fx * fy * 93.1) * 1.4
+
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: x, y: y, width: r, height: r)),
+                        with: .color(.white.opacity(0.15 + twinkle * 0.6))
+                    )
+                }
+
+                // ============ 4) SHOOTING STAR ============
+                if shootingStarActive {
+                    let start = CGPoint(
+                        x: size.width * 0.1 + shootingStarOffset.width,
+                        y: size.height * 0.2 + shootingStarOffset.height
+                    )
+                    let end = CGPoint(
+                        x: start.x + 120,
+                        y: start.y + 40
+                    )
+
+                    var path = Path()
+                    path.move(to: start)
+                    path.addLine(to: end)
+
+                    context.stroke(
+                        path,
+                        with: .color(.white.opacity(0.9)),
+                        lineWidth: 2
+                    )
+                }
+            }
+            .onAppear {
+                startShootingStarLoop()
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private func startShootingStarLoop() {
+        guard !reduceMotion else { return }
+
+        Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { _ in
+            shootingStarActive = true
+            shootingStarOffset = .zero
+
+            withAnimation(.linear(duration: 0.8)) {
+                shootingStarOffset = CGSize(width: 400, height: 160)
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                shootingStarActive = false
+            }
+        }
+    }
+
+    private func frac(_ x: CGFloat) -> CGFloat {
+        x - floor(x)
+    }
+}
+
+
+===== ./ChildRootTabView.swift =====
+
+//
+// ChildRootTabView.swift
+//
+
+import SwiftUI
+
+struct ChildRootTabView: View {
+    let childId: UUID
+
+    @EnvironmentObject private var appState: AppState
+    @State private var selectedTab: ChildTab = .today
+
+    enum ChildTab: Hashable {
+        case today, requests, avatar
+    }
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            ChildHomeView(childId: childId)
+                .tabItem { Label("Today", systemImage: "calendar") }
+                .tag(ChildTab.today)
+
+            ChildRewardsView(childId: childId)
+                .tabItem { Label("Requests", systemImage: "diamond.fill") }
+                .tag(ChildTab.requests)
+
+            // The Avatar tab remains available for *changing* avatars later.
+            ChildAvatarSetupView(childId: childId, onContinue: { selectedTab = .today })
+                .tabItem { Label("Avatar", systemImage: "person.crop.circle") }
+                .tag(ChildTab.avatar)
+        }
+    }
+}
+
+
+
+===== ./AppState.swift =====
+
+//
+// AppState.swift
+// parent_child_checklist
+//
+
+import SwiftUI
+import UIKit
+import Combine
+import Foundation
+import CloudKit
+
+@MainActor
+final class AppState: ObservableObject {
+
+    // MARK: - Published State (UI Source of Truth)
+    @Published var children: [ChildProfile] = []
+    @Published var tasks: [TaskItem] = [] // legacy / placeholder
+    // Parent-created task library
+    @Published var taskTemplates: [TaskTemplate] = []
+    // Task assignments + completions
+    @Published var taskAssignments: [TaskAssignment] = []
+    @Published var taskCompletions: [TaskCompletionRecord] = []
+    // Shared emoji library
+    @Published var customEmojis: [String] = []
+    // Event library (templates)
+    @Published var eventTemplates: [EventTemplate] = []
+    // Event assignments (per child)
+    @Published var eventAssignments: [EventAssignment] = []
+    // Locations (used by event assignments)
+    @Published var locations: [LocationItem] = []
+    // Append-only points ledger
+    @Published var pointsLedger: [PointsEntry] = []
+    // Requests
+    @Published var rewardRequests: [RewardRequest] = []
+
+    // MARK: - CloudKit status (read-only phase)
+    @Published private(set) var cloudKitLoaded: Bool = false
+    @Published private(set) var cloudKitErrorMessage: String? = nil
+    @Published private(set) var familyContext: FamilyCoordinator.FamilyContext? = nil
+
+    private var cancellables = Set<AnyCancellable>()
+
+    // MARK: - JSON Cache File Names
+    private let childrenFileName = "children.json"
+    private let taskTemplatesFileName = "taskTemplates.json"
+    private let customEmojisFileName = "customEmojis.json"
+    private let taskAssignmentsFileName = "taskAssignments.json"
+    private let taskCompletionsFileName = "taskCompletions.json"
+    private let eventTemplatesFileName = "eventTemplates.json"
+    private let eventAssignmentsFileName = "eventAssignments.json"
+    private let locationsFileName = "locations.json"
+    private let pointsLedgerFileName = "pointsLedger.json"
+    private let rewardRequestsFileName = "rewardRequests.json"
+
+    // MARK: - CloudKit integration
+    private let familyStore = FamilyDataStore(containerIdentifier: nil) // read-only snapshot loader
+    private let shareCoordinator = FamilyCoordinator(ck: CloudKitService(config: .init(containerIdentifier: nil)))
+    private let ck = CloudKitService(config: .init(containerIdentifier: nil)) // used for immediate writes (photo assets)
+
+    // MARK: - Rolling window config
+    /// Keep only the latest N days of detailed ledger, snapshot older entries.
+    private let ledgerKeepDays: Int = 90
+    /// Expose in case views want to align their cutoffs
+    var ledgerWindowDays: Int { ledgerKeepDays }
+
+    // MARK: - Init
+    init() {
+        // Load local JSON cache first → immediate UI
+        loadChildren()
+        loadTaskTemplates()
+        loadCustomEmojis()
+        loadTaskAssignments()
+        loadTaskCompletions()
+        loadEventTemplates()
+        loadEventAssignments()
+        loadLocations()
+        loadPointsLedger()
+        loadRewardRequests()
+
+        if children.isEmpty {
+            seedSampleData()
+        }
+
+        setupAutoSave()
+
+        // CloudKit bootstrap (read-only): load family if CloudKit already has user data
+        Task { await bootstrapFromCloudKit() }
+
+        // 🔹 Apply rolling-window compaction on app start
+        compactLedgerRollingWindow()
+    }
+
+    func seedSampleData() { }
+
+    // MARK: - Calendar helpers (ISO-like, Monday-first)
+    private var isoCalendar: Calendar {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = .current
+        return cal
+    }
+    private func dayOnly(_ date: Date) -> Date { isoCalendar.startOfDay(for: date) }
+
+    // MARK: - Name normalization
+    private func normalizedName(_ input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let collapsedSpaces = trimmed.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return collapsedSpaces.lowercased()
+    }
+
+    // MARK: - Children uniqueness
+    func isNameTaken(_ name: String, excluding childId: UUID? = nil) -> Bool {
+        let target = normalizedName(name)
+        guard !target.isEmpty else { return false }
+        return children.contains { child in
+            if let childId, child.id == childId { return false }
+            return normalizedName(child.name) == target
+        }
+    }
+
+    // MARK: - Task / Event template uniqueness
+    func isTaskTitleTaken(_ title: String, excluding templateId: UUID? = nil) -> Bool {
+        let target = normalizedName(title)
+        guard !target.isEmpty else { return false }
+        return taskTemplates.contains { tpl in
+            if let templateId, tpl.id == templateId { return false }
+            return normalizedName(tpl.title) == target
+        }
+    }
+    func isEventTitleTaken(_ title: String, excluding templateId: UUID? = nil) -> Bool {
+        let target = normalizedName(title)
+        guard !target.isEmpty else { return false }
+        return eventTemplates.contains { tpl in
+            if let templateId, tpl.id == templateId { return false }
+            return normalizedName(tpl.title) == target
+        }
+    }
+
+    // MARK: - Location uniqueness
+    func isLocationNameTaken(_ name: String, excluding locationId: UUID? = nil) -> Bool {
+        let target = normalizedName(name)
+        guard !target.isEmpty else { return false }
+        return locations.contains { loc in
+            if let locationId, loc.id == locationId { return false }
+            return normalizedName(loc.name) == target
+        }
+    }
+
+    @discardableResult
+    func updateChildColor(childId: UUID, newColorHex: String) -> Bool {
+        let trimmed = newColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard let idx = children.firstIndex(where: { $0.id == childId }) else { return false }
+        children[idx].colorHex = trimmed
+        return true
+    }
+
+    // MARK: - Child actions
+    @discardableResult
+    func createChild(name: String, colorHex: String) -> ChildProfile? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard !isNameTaken(trimmed) else { return nil }
+        let child = ChildProfile(name: trimmed, colorHex: colorHex, avatarId: nil)
+        children.append(child)
+        return child
+    }
+
+    func deleteChild(id: UUID) {
+        children.removeAll { $0.id == id }
+        tasks.removeAll { $0.childId == id }
+        let assignmentIds = taskAssignments.filter { $0.childId == id }.map(\.id)
+        taskAssignments.removeAll { $0.childId == id }
+        taskCompletions.removeAll { assignmentIds.contains($0.assignmentId) }
+        eventAssignments.removeAll { $0.childId == id }
+        // Keep points ledger for audit (but remove per-child entries for deleted child)
+        pointsLedger.removeAll { $0.childId == id }
+        rewardRequests.removeAll { $0.childId == id }
+    }
+
+    @discardableResult
+    func renameChild(id: UUID, newName: String) -> Bool {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard !isNameTaken(trimmed, excluding: id) else { return false }
+        guard let idx = children.firstIndex(where: { $0.id == id }) else { return false }
+        children[idx].name = trimmed
+        return true
+    }
+
+    // MARK: - Task Template CRUD
+    @discardableResult
+    func createTaskTemplate(title: String, iconSymbol: String, rewardPoints: Int = 1) -> TaskTemplate? {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return nil }
+        guard !isTaskTitleTaken(trimmedTitle) else { return nil }
+        let trimmedIcon = iconSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedIcon.isEmpty else { return nil }
+        let points = max(0, rewardPoints)
+        let tpl = TaskTemplate(title: trimmedTitle, iconSymbol: trimmedIcon, rewardPoints: points)
+        taskTemplates.append(tpl)
+        return tpl
+    }
+
+    @discardableResult
+    func updateTaskTemplate(id: UUID, newTitle: String, newIconSymbol: String, newRewardPoints: Int) -> Bool {
+        let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return false }
+        guard !isTaskTitleTaken(trimmedTitle, excluding: id) else { return false }
+        let trimmedIcon = newIconSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedIcon.isEmpty else { return false }
+        guard let idx = taskTemplates.firstIndex(where: { $0.id == id }) else { return false }
+        taskTemplates[idx].title = trimmedTitle
+        taskTemplates[idx].iconSymbol = trimmedIcon
+        taskTemplates[idx].rewardPoints = max(0, newRewardPoints)
+        return true
+    }
+
+    private func isTaskTemplateAssigned(_ templateId: UUID) -> Bool {
+        taskAssignments.contains { $0.templateId == templateId }
+    }
+
+    @discardableResult
+    func deleteTaskTemplate(id: UUID) -> Bool {
+        guard !isTaskTemplateAssigned(id) else { return false }
+        taskTemplates.removeAll { $0.id == id }
+        return true
+    }
+
+    // MARK: - Event Template CRUD
+    @discardableResult
+    func createEventTemplate(title: String, iconSymbol: String) -> EventTemplate? {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return nil }
+        guard !isEventTitleTaken(trimmedTitle) else { return nil }
+        let trimmedIcon = iconSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedIcon.isEmpty else { return nil }
+        let tpl = EventTemplate(title: trimmedTitle, iconSymbol: trimmedIcon, createdAt: Date(), updatedAt: Date())
+        eventTemplates.append(tpl)
+        return tpl
+    }
+
+    @discardableResult
+    func updateEventTemplate(id: UUID, newTitle: String, newIconSymbol: String) -> Bool {
+        let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return false }
+        guard !isEventTitleTaken(trimmedTitle, excluding: id) else { return false }
+        let trimmedIcon = newIconSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedIcon.isEmpty else { return false }
+        guard let idx = eventTemplates.firstIndex(where: { $0.id == id }) else { return false }
+        eventTemplates[idx].title = trimmedTitle
+        eventTemplates[idx].iconSymbol = trimmedIcon
+        eventTemplates[idx].updatedAt = Date()
+        return true
+    }
+
+    func deleteEventTemplate(id: UUID) {
+        eventTemplates.removeAll { $0.id == id }
+    }
+
+    // MARK: - Avatar uniqueness + update
+    func isAvatarTaken(_ avatarId: String, excluding childId: UUID? = nil) -> Bool {
+        let t = avatarId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return false }
+        return children.contains { child in
+            if let childId, child.id == childId { return false }
+            return child.avatarId == t
+        }
+    }
+
+    @discardableResult
+    func updateChildAvatar(childId: UUID, newAvatarId: String?) -> Bool {
+        guard let idx = children.firstIndex(where: { $0.id == childId }) else { return false }
+        // Allow clearing avatar (nil => "Not chosen yet")
+        let trimmed = newAvatarId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            guard !isAvatarTaken(trimmed, excluding: childId) else { return false }
+            children[idx].avatarId = trimmed
+        } else {
+            children[idx].avatarId = nil
+        }
+        return true
+    }
+
+    // MARK: - Custom Emoji Library
+    func isCustomEmojiTaken(_ emoji: String) -> Bool {
+        let t = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return false }
+        return customEmojis.contains(t)
+    }
+
+    @discardableResult
+    func addCustomEmoji(_ emoji: String) -> Bool {
+        let t = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return false }
+        guard !isCustomEmojiTaken(t) else { return false }
+        customEmojis.append(t)
+        // De-duplicate while preserving order
+        var seen = Set<String>()
+        customEmojis = customEmojis.filter { seen.insert($0).inserted }
+        return true
+    }
+
+    func deleteCustomEmoji(_ emoji: String) {
+        let t = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        customEmojis.removeAll { $0 == t }
+    }
+
+    func deleteAllCustomEmojis() {
+        customEmojis = []
+    }
+
+    // MARK: - Locations CRUD (rename propagation to event assignments)
+    @discardableResult
+    func createLocation(name: String) -> LocationItem? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard !isLocationNameTaken(trimmed) else { return nil }
+        let loc = LocationItem(name: trimmed, createdAt: Date(), updatedAt: Date())
+        locations.append(loc)
+        return loc
+    }
+
+    @discardableResult
+    func renameLocation(id: UUID, newName: String) -> Bool {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard !isLocationNameTaken(trimmed, excluding: id) else { return false }
+        guard let idx = locations.firstIndex(where: { $0.id == id }) else { return false }
+        locations[idx].name = trimmed
+        locations[idx].updatedAt = Date()
+        for i in eventAssignments.indices {
+            if eventAssignments[i].locationId == id {
+                eventAssignments[i].locationNameSnapshot = trimmed
+                eventAssignments[i].updatedAt = Date()
+            }
+        }
+        return true
+    }
+
+    func deleteLocation(id: UUID) {
+        locations.removeAll { $0.id == id }
+        for i in eventAssignments.indices {
+            if eventAssignments[i].locationId == id {
+                eventAssignments[i].locationId = nil
+                eventAssignments[i].updatedAt = Date()
+            }
+        }
+    }
+
+    // MARK: - Event Assignment CRUD
+    @discardableResult
+    func createEventAssignment(_ assignment: EventAssignment) -> EventAssignment {
+        eventAssignments.append(assignment)
+        return assignment
+    }
+
+    @discardableResult
+    func updateEventAssignment(_ updated: EventAssignment) -> Bool {
+        guard let idx = eventAssignments.firstIndex(where: { $0.id == updated.id }) else { return false }
+        eventAssignments[idx] = updated
+
+        // STRICT MODE: resync schedule of all tasks linked to this event assignment
+        for i in taskAssignments.indices {
+            guard taskAssignments[i].linkedEventAssignmentId == updated.id else { continue }
+            var t = taskAssignments[i]
+            applyStrictLinkedEventSchedule(to: &t, event: updated)
+            t.updatedAt = Date()
+            taskAssignments[i] = t
+        }
+        return true
+    }
+
+    private func applyLinkedEventSchedule(to task: inout TaskAssignment, event: EventAssignment) {
+        if !event.isActive {
+            task.linkedEventAssignmentId = nil
+            return
+        }
+        switch event.occurrence {
+        case .onceOnly:
+            task.occurrence = .onceOnly
+            task.weekdays = []
+            task.startDate = event.startDate
+            task.endDate = nil
+        case .specifiedDays:
+            task.occurrence = .specifiedDays
+            task.weekdays = event.weekdays.sorted()
+            if task.startDate < event.startDate { task.startDate = event.startDate }
+            if let eventEnd = event.endDate {
+                if let taskEnd = task.endDate { task.endDate = min(taskEnd, eventEnd) } else { task.endDate = eventEnd }
+                if let taskEnd = task.endDate, taskEnd < task.startDate { task.endDate = task.startDate }
+            } else if let taskEnd = task.endDate, taskEnd < task.startDate {
+                task.endDate = task.startDate
+            }
+        }
+    }
+
+    private func applyStrictLinkedEventSchedule(to task: inout TaskAssignment, event: EventAssignment) {
+        if !event.isActive {
+            task.linkedEventAssignmentId = nil
+            return
+        }
+        switch event.occurrence {
+        case .onceOnly:
+            task.occurrence = .onceOnly
+            task.weekdays = []
+            task.startDate = event.startDate
+            task.endDate = nil
+        case .specifiedDays:
+            task.occurrence = .specifiedDays
+            task.weekdays = event.weekdays.sorted()
+            task.startDate = event.startDate
+            task.endDate = event.endDate
+        }
+    }
+
+    func deleteEventAssignment(id: UUID) {
+        let linkedTaskIds = taskAssignments
+            .filter { $0.linkedEventAssignmentId == id }
+            .map(\.id)
+        taskAssignments.removeAll { $0.linkedEventAssignmentId == id }
+        taskCompletions.removeAll { linkedTaskIds.contains($0.assignmentId) }
+        eventAssignments.removeAll { $0.id == id }
+    }
+
+    // MARK: - Task Assignment CRUD (basic)
+    @discardableResult
+    func createTaskAssignment(_ assignment: TaskAssignment) -> TaskAssignment {
+        taskAssignments.append(assignment)
+        return assignment
+    }
+
+    @discardableResult
+    func updateTaskAssignment(_ updated: TaskAssignment) -> Bool {
+        guard let idx = taskAssignments.firstIndex(where: { $0.id == updated.id }) else { return false }
+        taskAssignments[idx] = updated
+        return true
+    }
+
+    func deleteTaskAssignment(id: UUID) {
+        taskAssignments.removeAll { $0.id == id }
+        taskCompletions.removeAll { $0.assignmentId == id }
+    }
+
+    // MARK: - Date helpers
+    private func weekdayIndexMondayFirst(for date: Date) -> Int {
+        let weekday = isoCalendar.component(.weekday, from: date)
+        switch weekday {
+        case 2: return 0
+        case 3: return 1
+        case 4: return 2
+        case 5: return 3
+        case 6: return 4
+        case 7: return 5
+        default: return 6
+        }
+    }
+
+    // MARK: - Task assignments for a day
+    func assignments(for childId: UUID, on selectedDate: Date) -> [TaskAssignment] {
+        let d = dayOnly(selectedDate)
+        return taskAssignments
+            .filter { $0.childId == childId }
+            .filter { assignment in
+                let start = dayOnly(assignment.startDate)
+                let end = assignment.endDate.map(dayOnly)
+                switch assignment.occurrence {
+                case .onceOnly:
+                    return d == start
+                case .specifiedDays:
+                    guard d >= start else { return false }
+                    if let end, d > end { return false }
+                    let w = weekdayIndexMondayFirst(for: d)
+                    return assignment.weekdays.contains(w)
+                }
+            }
+            .sorted { a, b in
+                if a.isActive != b.isActive { return a.isActive && !b.isActive }
+                return a.taskTitle.localizedCaseInsensitiveCompare(b.taskTitle) == .orderedAscending
+            }
+    }
+
+    // MARK: - Events for a day
+    func events(for childId: UUID, on selectedDate: Date) -> [EventAssignment] {
+        let d = dayOnly(selectedDate)
+        return eventAssignments
+            .filter { $0.childId == childId }
+            .filter { assignment in
+                let start = dayOnly(assignment.startDate)
+                let end = assignment.endDate.map(dayOnly)
+                switch assignment.occurrence {
+                case .onceOnly:
+                    return d == start
+                case .specifiedDays:
+                    guard d >= start else { return false }
+                    if let end, d > end { return false }
+                    let w = weekdayIndexMondayFirst(for: d)
+                    return assignment.weekdays.contains(w)
+                }
+            }
+            .sorted { a, b in
+                if a.isActive != b.isActive { return a.isActive && !b.isActive }
+                switch (a.startTime, b.startTime) {
+                case (nil, nil): break
+                case (nil, _?): return false
+                case (_?, nil): return true
+                case (let ta?, let tb?): if ta != tb { return ta < tb }
+                }
+                return a.eventTitle.localizedCaseInsensitiveCompare(b.eventTitle) == .orderedAscending
+            }
+    }
+
+    // MARK: - Completion Helpers + Points awarding
+
+    func completionRecord(for assignmentId: UUID, on date: Date) -> TaskCompletionRecord? {
+        let d = dayOnly(date)
+        return taskCompletions.first { $0.assignmentId == assignmentId && dayOnly($0.day) == d }
+    }
+
+    func isCompleted(assignmentId: UUID, on date: Date) -> Bool {
+        completionRecord(for: assignmentId, on: date) != nil
+    }
+
+    /// Standard toggle flow (no photo evidence path). If a completion exists → un-complete; else → complete.
+    func toggleCompletion(assignmentId: UUID, on date: Date) {
+        let d = dayOnly(date)
+
+        if let idx = taskCompletions.firstIndex(where: { $0.assignmentId == assignmentId && dayOnly($0.day) == d }) {
+            // UN-COMPLETE
+            let rec = taskCompletions[idx]
+
+            // 1) Remove locally
+            taskCompletions.remove(at: idx)
+
+            // 2) Remove in CloudKit (best effort)
+            Task { await deleteCompletionFromCloudKit(rec) }
+
+            // 3) Cleanup local photo file
+            if let url = rec.photoEvidenceLocalURL {
+                try? FileManager.default.removeItem(at: url)
+            }
+
+            // 4) Reverse points
+            if let assignment = taskAssignments.first(where: { $0.id == assignmentId }) {
+                let points = max(0, assignment.rewardPoints)
+                guard points > 0 else { return }
+                appendPointsEntry(childId: assignment.childId,
+                                  assignmentId: assignmentId,
+                                  day: d,
+                                  delta: -points,
+                                  reason: .completed)
+            }
+        } else {
+            // COMPLETE (no photo evident path—this call is used by non-photo tasks)
+            let rec = TaskCompletionRecord(assignmentId: assignmentId, day: d, completedAt: Date(), hasPhotoEvidence: false)
+            taskCompletions.append(rec)
+
+            // (Optional) Save to CloudKit without asset (pure completion row)
+            Task { await uploadCompletionToCloudKit(rec) }
+
+            // Points
+            if let assignment = taskAssignments.first(where: { $0.id == assignmentId }) {
+                let points = max(0, assignment.rewardPoints)
+                guard points > 0 else { return }
+                appendPointsEntry(childId: assignment.childId,
+                                  assignmentId: assignmentId,
+                                  day: d,
+                                  delta: points,
+                                  reason: .completed)
+            }
+        }
+    }
+
+    /// NEW: Complete a task with required photo evidence (Option A: immediate CloudKit upload).
+    func completeTaskWithPhoto(assignmentId: UUID, on date: Date, image: UIImage) {
+        let d = dayOnly(date)
+
+        // If already completed for the day, do nothing (or could replace photo in a future iteration)
+        guard completionRecord(for: assignmentId, on: d) == nil else { return }
+
+        // 1) Save image to a local Evidence folder (JPEG)
+        guard let fileURL = savePhotoEvidenceToDisk(image) else {
+            // If saving failed, we can still complete without photo to avoid blocking the child.
+            let fallback = TaskCompletionRecord(assignmentId: assignmentId, day: d, completedAt: Date(), hasPhotoEvidence: false)
+            taskCompletions.append(fallback)
+            Task { await uploadCompletionToCloudKit(fallback) }
+            awardPointsForCompletion(assignmentId: assignmentId, on: d)
+            return
+        }
+
+        // 2) Create completion record marked with photo
+        let rec = TaskCompletionRecord(
+            assignmentId: assignmentId,
+            day: d,
+            completedAt: Date(),
+            hasPhotoEvidence: true,
+            photoEvidenceLocalURL: fileURL
+        )
+        taskCompletions.append(rec)
+
+        // 3) Upload to CloudKit (record + CKAsset)
+        Task { await uploadCompletionToCloudKit(rec) }
+
+        // 4) Award points
+        awardPointsForCompletion(assignmentId: assignmentId, on: d)
+    }
+
+    private func awardPointsForCompletion(assignmentId: UUID, on day: Date) {
+        if let assignment = taskAssignments.first(where: { $0.id == assignmentId }) {
+            let points = max(0, assignment.rewardPoints)
+            guard points > 0 else { return }
+            appendPointsEntry(childId: assignment.childId,
+                              assignmentId: assignmentId,
+                              day: dayOnly(day),
+                              delta: points,
+                              reason: .completed)
+        }
+    }
+
+    // MARK: - CloudKit Upload/Delete for Completion
+
+    private func uploadCompletionToCloudKit(_ rec: TaskCompletionRecord) async {
+        guard let ctx = familyContext else { return } // if not available yet, skip (local JSON still holds it)
+        let zoneID = ctx.zoneID
+        let record = TaskCompletionRecordMapper.toRecord(rec, zoneID: zoneID)
+        do {
+            _ = try await ck.save(record, to: ctx.database)
+        } catch {
+            // best-effort: keep local; CloudKit may sync later after next bootstrap in future enhancement
+            print("⚠️ uploadCompletionToCloudKit failed: \(error)")
+        }
+    }
+
+    private func deleteCompletionFromCloudKit(_ rec: TaskCompletionRecord) async {
+        guard let ctx = familyContext else { return }
+        let recordID = CKID.recordID(type: CKSchema.RecordType.taskCompletion, uuid: rec.id, zoneID: ctx.zoneID)
+        do {
+            try await ck.delete(recordID: recordID, from: ctx.database)
+        } catch {
+            // best-effort
+            print("⚠️ deleteCompletionFromCloudKit failed: \(error)")
+        }
+    }
+
+    // MARK: - Photo Evidence Disk Helpers
+
+    private func evidenceFolderURL() -> URL {
+        let folder = appFolderURL().appendingPathComponent("Evidence", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: folder.path) {
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        return folder
+    }
+
+    /// Saves `UIImage` to Evidence folder as a JPEG (quality 0.85). Returns file URL if successful.
+    private func savePhotoEvidenceToDisk(_ image: UIImage) -> URL? {
+        // Prefer JPEG to balance size/quality. Fall back to PNG if JPEG fails.
+        let filename = UUID().uuidString + ".jpg"
+        let url = evidenceFolderURL().appendingPathComponent(filename)
+
+        let jpegQuality: CGFloat = 0.85
+        if let data = image.jpegData(compressionQuality: jpegQuality) {
+            do {
+                try data.write(to: url, options: [.atomic])
+                return url
+            } catch {
+                print("❌ Failed to write JPEG: \(error)")
+            }
+        }
+
+        // Fallback PNG
+        if let data = image.pngData() {
+            do {
+                try data.write(to: url, options: [.atomic])
+                return url
+            } catch {
+                print("❌ Failed to write PNG: \(error)")
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Points & Ledger
+
+    private func appendPointsEntry(childId: UUID, assignmentId: UUID?, day: Date, delta: Int, reason: PointsReason) {
+        let entry = PointsEntry(
+            childId: childId,
+            assignmentId: assignmentId,
+            day: dayOnly(day),
+            delta: delta,
+            reason: reason,
+            createdAt: Date()
+        )
+        pointsLedger.append(entry)
+    }
+
+    func childPointsTotal(childId: UUID) -> Int {
+        pointsLedger
+            .filter { $0.childId == childId }
+            .reduce(0) { $0 + $1.delta }
+    }
+
+    // MARK: - Reward Requests
+
+    /// Create a new pending request from child
+    @discardableResult
+    func createRewardRequest(childId: UUID, title: String) -> RewardRequest? {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return nil }
+        let now = Date()
+        let req = RewardRequest(
+            childId: childId,
+            title: t,
+            status: .pending,
+            approvedCost: nil,
+            requestedAt: now,
+            approvedAt: nil,
+            notApprovedAt: nil,
+            claimedAt: nil,
+            updatedAt: now
+        )
+        rewardRequests.insert(req, at: 0) // newest first
+        return req
+    }
+
+    /// Child can edit title only when pending
+    @discardableResult
+    func updateRewardRequestTitle(id: UUID, newTitle: String) -> Bool {
+        let t = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return false }
+        guard let idx = rewardRequests.firstIndex(where: { $0.id == id }) else { return false }
+        guard rewardRequests[idx].status == .pending else { return false }
+        rewardRequests[idx].title = t
+        rewardRequests[idx].updatedAt = Date()
+        return true
+    }
+
+    /// Child or parent can delete any request at any time (no refunds if already claimed)
+    @discardableResult
+    func deleteRewardRequest(id: UUID) -> Bool {
+        if let idx = rewardRequests.firstIndex(where: { $0.id == id }) {
+            rewardRequests.remove(at: idx)
+            return true
+        }
+        return false
+    }
+
+    /// Parent: approve with a gem cost; can also refine the title before approving
+    @discardableResult
+    func approveRewardRequest(id: UUID, cost: Int, newTitle: String?) -> Bool {
+        guard let idx = rewardRequests.firstIndex(where: { $0.id == id }) else { return false }
+        guard rewardRequests[idx].status == .pending else { return false }
+        let now = Date()
+        let c = max(0, cost)
+        rewardRequests[idx].approvedCost = c
+        if let t = newTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+            rewardRequests[idx].title = t
+        }
+        rewardRequests[idx].status = .approved
+        rewardRequests[idx].approvedAt = now
+        rewardRequests[idx].notApprovedAt = nil
+        rewardRequests[idx].updatedAt = now
+        return true
+    }
+
+    /// Parent: not approved ("Not this time")
+    @discardableResult
+    func notApproveRewardRequest(id: UUID) -> Bool {
+        guard let idx = rewardRequests.firstIndex(where: { $0.id == id }) else { return false }
+        guard rewardRequests[idx].status == .pending else { return false }
+        let now = Date()
+        rewardRequests[idx].approvedCost = nil
+        rewardRequests[idx].status = .notApproved
+        rewardRequests[idx].notApprovedAt = now
+        rewardRequests[idx].approvedAt = nil
+        rewardRequests[idx].updatedAt = now
+        return true
+    }
+
+    /// Child: claim an approved request (must have enough gems)
+    @discardableResult
+    func claimRewardRequest(id: UUID) -> Bool {
+        guard let idx = rewardRequests.firstIndex(where: { $0.id == id }) else { return false }
+        var req = rewardRequests[idx]
+        guard req.status == .approved, let cost = req.approvedCost, cost > 0 else { return false }
+        let balance = childPointsTotal(childId: req.childId)
+        guard balance >= cost else { return false }
+
+        // Deduct gems now
+        appendPointsEntry(
+            childId: req.childId,
+            assignmentId: nil,
+            day: Date(),
+            delta: -cost,
+            reason: .redeemed
+        )
+
+        // Mark as claimed with timestamp
+        let now = Date()
+        req.status = .claimed
+        req.claimedAt = now
+        req.updatedAt = now
+        rewardRequests[idx] = req
+
+        // 🔹 Rolling window (after ledger change)
+        compactLedgerRollingWindow()
+
+        return true
+    }
+
+    /// Count for tab title (parent)
+    var pendingRewardRequestsCount: Int {
+        rewardRequests.filter { $0.status == .pending }.count
+    }
+
+    // MARK: - Manual balance adjustment (append-only ledger)
+
+    /// Whether an adjustment would keep the child's balance >= 0
+    func canAdjustChildPoints(childId: UUID, delta: Int) -> Bool {
+        let newTotal = childPointsTotal(childId: childId) + delta
+        return newTotal >= 0
+    }
+
+    /// Append a manual adjustment entry. Returns false if it would go below 0 (clamped).
+    @discardableResult
+    func adjustChildPoints(childId: UUID, delta: Int) -> Bool {
+        guard canAdjustChildPoints(childId: childId, delta: delta) else { return false }
+        appendPointsEntry(
+            childId: childId,
+            assignmentId: nil,
+            day: Date(),
+            delta: delta,
+            reason: .manualAdjust
+        )
+        // 🔹 Rolling window (after ledger change)
+        compactLedgerRollingWindow()
+        return true
+    }
+
+    // MARK: - Rolling Window Compaction (keep last N days; snapshot older)
+    /// Keeps per-child points history only for the last `ledgerKeepDays` days.
+    /// Before-cutoff entries are reduced to a single snapshot "Balance carried forward".
+    func compactLedgerRollingWindow() {
+        let days = ledgerKeepDays
+        guard days > 0 else { return }
+        guard !pointsLedger.isEmpty else { return }
+
+        let now = Date()
+        guard let cutoffRaw = Calendar.current.date(byAdding: .day, value: -days, to: now) else { return }
+        let cutoff = dayOnly(cutoffRaw)
+
+        let childIds = Set(pointsLedger.map { $0.childId })
+        var newLedger: [PointsEntry] = []
+        newLedger.reserveCapacity(pointsLedger.count)
+
+        for childId in childIds {
+            let childEntries = pointsLedger.filter { $0.childId == childId }
+            let oldEntries = childEntries.filter { dayOnly($0.day) < cutoff }
+            let recentEntries = childEntries.filter { dayOnly($0.day) >= cutoff }
+
+            let oldTotal = oldEntries.reduce(0) { $0 + $1.delta }
+
+            if !oldEntries.isEmpty {
+                if oldTotal != 0 {
+                    // Snapshot carries forward exact balance up to cutoff
+                    let snapshot = PointsEntry(
+                        childId: childId,
+                        assignmentId: nil,
+                        day: cutoff,                 // start-of-day cutoff
+                        delta: oldTotal,
+                        reason: .manualAdjust,       // rendered as "Balance carried forward" in UI when detected at cutoff
+                        createdAt: cutoff
+                    )
+                    newLedger.append(snapshot)
+                }
+                newLedger.append(contentsOf: recentEntries)
+            } else {
+                newLedger.append(contentsOf: recentEntries)
+            }
+        }
+
+        // Sort by day then createdAt for stable ordering
+        newLedger.sort {
+            if dayOnly($0.day) != dayOnly($1.day) { return dayOnly($0.day) < dayOnly($1.day) }
+            return $0.createdAt < $1.createdAt
+        }
+
+        if newLedger != pointsLedger {
+            pointsLedger = newLedger
+        }
+    }
+
+    // MARK: - Auto Save (JSON cache)
+    private func setupAutoSave() {
+        $children.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveChildren() }
+            .store(in: &cancellables)
+
+        $taskTemplates.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveTaskTemplates() }
+            .store(in: &cancellables)
+
+        $customEmojis.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveCustomEmojis() }
+            .store(in: &cancellables)
+
+        $taskAssignments.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveTaskAssignments() }
+            .store(in: &cancellables)
+
+        $taskCompletions.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveTaskCompletions() }
+            .store(in: &cancellables)
+
+        $eventTemplates.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveEventTemplates() }
+            .store(in: &cancellables)
+
+        $eventAssignments.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveEventAssignments() }
+            .store(in: &cancellables)
+
+        $locations.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveLocations() }
+            .store(in: &cancellables)
+
+        $pointsLedger.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.savePointsLedger() }
+            .store(in: &cancellables)
+
+        $rewardRequests.dropFirst().debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveRewardRequests() }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Storage folder
+    private func appFolderURL() -> URL {
+        let fm = FileManager.default
+        let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
+        ?? fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let folder = base.appendingPathComponent("parent_child_checklist", isDirectory: true)
+        if !fm.fileExists(atPath: folder.path) {
+            try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        return folder
+    }
+
+    // MARK: - JSON persistence helpers
+    private func write<T: Encodable>(_ value: T, to url: URL, label: String) {
+        do {
+            let data = try JSONEncoder().encode(value)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            print("❌ Failed to save \(label): \(error)")
+        }
+    }
+
+    private func read<T: Decodable>(_ type: T.Type, from url: URL, label: String) -> T? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            print("❌ Failed to load \(label): \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - JSON file URLs
+    private func childrenFileURL() -> URL { appFolderURL().appendingPathComponent(childrenFileName) }
+    private func taskTemplatesFileURL() -> URL { appFolderURL().appendingPathComponent(taskTemplatesFileName) }
+    private func customEmojisFileURL() -> URL { appFolderURL().appendingPathComponent(customEmojisFileName) }
+    private func taskAssignmentsFileURL() -> URL { appFolderURL().appendingPathComponent(taskAssignmentsFileName) }
+    private func taskCompletionsFileURL() -> URL { appFolderURL().appendingPathComponent(taskCompletionsFileName) }
+    private func eventTemplatesFileURL() -> URL { appFolderURL().appendingPathComponent(eventTemplatesFileName) }
+    private func eventAssignmentsFileURL() -> URL { appFolderURL().appendingPathComponent(eventAssignmentsFileName) }
+    private func locationsFileURL() -> URL { appFolderURL().appendingPathComponent(locationsFileName) }
+    private func pointsLedgerFileURL() -> URL { appFolderURL().appendingPathComponent(pointsLedgerFileName) }
+    private func rewardRequestsFileURL() -> URL { appFolderURL().appendingPathComponent(rewardRequestsFileName) }
+
+    // MARK: - JSON persistence
+    private func saveChildren() { write(children, to: childrenFileURL(), label: "children") }
+    private func loadChildren() { children = read([ChildProfile].self, from: childrenFileURL(), label: "children") ?? [] }
+
+    private func saveTaskTemplates() { write(taskTemplates, to: taskTemplatesFileURL(), label: "task templates") }
+    private func loadTaskTemplates() { taskTemplates = read([TaskTemplate].self, from: taskTemplatesFileURL(), label: "task templates") ?? [] }
+
+    private func saveCustomEmojis() { write(customEmojis, to: customEmojisFileURL(), label: "custom emojis") }
+    private func loadCustomEmojis() { customEmojis = read([String].self, from: customEmojisFileURL(), label: "custom emojis") ?? [] }
+
+    private func saveTaskAssignments() { write(taskAssignments, to: taskAssignmentsFileURL(), label: "task assignments") }
+    private func loadTaskAssignments() { taskAssignments = read([TaskAssignment].self, from: taskAssignmentsFileURL(), label: "task assignments") ?? [] }
+
+    private func saveTaskCompletions() { write(taskCompletions, to: taskCompletionsFileURL(), label: "task completions") }
+    private func loadTaskCompletions() { taskCompletions = read([TaskCompletionRecord].self, from: taskCompletionsFileURL(), label: "task completions") ?? [] }
+
+    private func saveEventTemplates() { write(eventTemplates, to: eventTemplatesFileURL(), label: "event templates") }
+    private func loadEventTemplates() { eventTemplates = read([EventTemplate].self, from: eventTemplatesFileURL(), label: "event templates") ?? [] }
+
+    private func saveEventAssignments() { write(eventAssignments, to: eventAssignmentsFileURL(), label: "event assignments") }
+    private func loadEventAssignments() { eventAssignments = read([EventAssignment].self, from: eventAssignmentsFileURL(), label: "event assignments") ?? [] }
+
+    private func saveLocations() { write(locations, to: locationsFileURL(), label: "locations") }
+    private func loadLocations() { locations = read([LocationItem].self, from: locationsFileURL(), label: "locations") ?? [] }
+
+    private func savePointsLedger() { write(pointsLedger, to: pointsLedgerFileURL(), label: "points ledger") }
+    private func loadPointsLedger() { pointsLedger = read([PointsEntry].self, from: pointsLedgerFileURL(), label: "points ledger") ?? [] }
+
+    private func saveRewardRequests() { write(rewardRequests, to: rewardRequestsFileURL(), label: "reward requests") }
+    private func loadRewardRequests() { rewardRequests = read([RewardRequest].self, from: rewardRequestsFileURL(), label: "reward requests") ?? [] }
+
+    // MARK: - CloudKit bootstrap (read-only)
+    private func bootstrapFromCloudKit() async {
+        do {
+            let snapshot = try await familyStore.loadSnapshot()
+            do {
+                let s = try await shareCoordinator.bootstrapFamily()
+                switch s {
+                case .shared(let ctx), .privateOwner(let ctx): self.familyContext = ctx
+                }
+            } catch {
+                print("⚠️ Failed to resolve FamilyContext: \(error)")
+            }
+            guard FamilyDataStore.hasUserData(snapshot) else {
+                cloudKitLoaded = false
+                cloudKitErrorMessage = nil
+                print("ℹ️ CloudKit snapshot empty — keeping local JSON as source for now.")
+                return
+            }
+            self.children = snapshot.children
+            self.taskTemplates = snapshot.taskTemplates
+            self.taskAssignments = snapshot.taskAssignments
+            self.taskCompletions = snapshot.taskCompletions
+            self.customEmojis = snapshot.customEmojis
+            self.eventTemplates = snapshot.eventTemplates
+            self.eventAssignments = snapshot.eventAssignments
+            self.locations = snapshot.locations
+            // pointsLedger & rewardRequests are not yet fetched from CloudKit (read-only)
+            cloudKitLoaded = true
+            cloudKitErrorMessage = nil
+            print("✅ CloudKit loaded family snapshot (\(children.count) children, \(taskTemplates.count) templates, \(eventTemplates.count) events)")
+        } catch {
+            cloudKitLoaded = false
+            cloudKitErrorMessage = String(describing: error)
+            print("❌ CloudKit bootstrap failed: \(error)")
+        }
+    }
+
+    // MARK: - Helpers for Sharing UI
+    func cloudDatabaseForCurrentFamily() -> CKDatabase {
+        if let ctx = familyContext {
+            switch ctx.database {
+            case .private: return CKContainer.default().privateCloudDatabase
+            case .shared:  return CKContainer.default().sharedCloudDatabase
+            }
+        }
+        return CKContainer.default().privateCloudDatabase
+    }
+}
+
+// MARK: - Custom Emoji usage lookups (for safe deletion)
+extension AppState {
+    /// Returns how many Task Templates and Event Templates currently use this emoji.
+    func emojiUsage(_ emoji: String) -> (tasks: Int, events: Int) {
+        let tasks = taskTemplates.reduce(0) { $0 + ($1.iconSymbol == emoji ? 1 : 0) }
+        let events = eventTemplates.reduce(0) { $0 + ($1.iconSymbol == emoji ? 1 : 0) }
+        return (tasks, events)
+    }
+
+    /// Returns the number of saved custom emojis that are used by templates.
+    func countCustomEmojisInUse() -> Int {
+        var used = 0
+        for e in customEmojis {
+            let u = emojiUsage(e)
+            if u.tasks > 0 || u.events > 0 {
+                used += 1
+            }
+        }
+        return used
+    }
+}
+
+
+===== ./ParentChildWeeklyView.swift =====
+
+//
+// ParentChildWeeklyView.swift
+// parent_child_checklist
+//
+
+import SwiftUI
+import UIKit
+
+// MARK: - Local theme tokens (match child screens)
+private enum FuturistTheme {
+    static let skyTop = Color(red: 0.02, green: 0.06, blue: 0.16)
+    static let skyBottom = Color(red: 0.01, green: 0.03, blue: 0.10)
+    static let neonAqua = Color(red: 0.20, green: 0.95, blue: 1.00)
+
+    // Text
+    static let textPrimary   = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary = Color.white.opacity(0.78)
+
+    // Accents (radios)
+    static let magenta = Color(hue: 0.83, saturation: 0.85, brightness: 0.95) // unchecked ring
+    static let green   = Color(hue: 0.33, saturation: 0.78, brightness: 0.92) // checked ring
+}
+
+// MARK: - Reusable card background (glass + thin stroke)
+private struct CardBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private let surface      = Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+    private let surfaceSolid = Color(red: 0.05, green: 0.10, blue: 0.22)
+    var cornerRadius: CGFloat = 12
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(reduceTransparency ? surfaceSolid : surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 2)
+    }
+}
+
+// MARK: - Subtle lower sweep behind content (like child)
+private struct LowerContentSweep: View {
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: .clear, location: 0.00),
+                .init(color: FuturistTheme.skyTop.opacity(0.05), location: 0.50),
+                .init(color: FuturistTheme.skyTop.opacity(0.08), location: 1.00)
+            ]),
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Neon divider (dark → neon → dark)
+private struct TaskRowGradientRule: View {
+    var leadingInset: CGFloat
+    var trailingInset: CGFloat
+    var thickness: CGFloat = 2
+
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 0.00),
+                .init(color: FuturistTheme.neonAqua,             location: 0.50),
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 1.00),
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(height: thickness)
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+struct ParentChildWeeklyView: View {
+    let childId: UUID
+    @EnvironmentObject private var appState: AppState
+
+    // Selected day
+    @State private var selectedDate: Date = Date()
+
+    // Sheets (Assign entry points)
+    @State private var showAssignTaskSheet = false
+    @State private var showAssignEventSheet = false
+
+    // Edit sheets
+    @State private var assignmentToEdit: TaskAssignment? = nil
+    @State private var eventToEdit: EventAssignment? = nil
+
+    // Toast
+    @State private var toastMessage: String? = nil
+
+    // Photo viewer sheet
+    @State private var completionToPreview: TaskCompletionRecord? = nil
+    @State private var viewerTaskTitle: String = ""
+
+    // MARK: - Tunables to match child screens
+    private static let ruleLeadingInset: CGFloat = 16
+    private static let ruleTrailingInset: CGFloat = 14
+    private static let ruleExtraBottomPadding: CGFloat = 6
+    private static let ruleVerticalOffset: CGFloat = 6  // same as child Requests
+    private static let headerTopPadding: CGFloat = 6
+    private static let headerBottomPadding: CGFloat = 4
+
+    // Monday-first calendar
+    private var isoCalendar: Calendar {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = .current
+        return cal
+    }
+
+    private var child: ChildProfile? {
+        appState.children.first { $0.id == childId }
+    }
+
+    private var today: Date { Date() }
+
+    // MARK: - Header texts
+    private var headerSelectedDayText: String {
+        let df = DateFormatter()
+        df.calendar = isoCalendar
+        df.locale = .current
+        df.dateFormat = "EEEE"
+        return df.string(from: selectedDate)
+    }
+
+    private var headerSelectedDateText: String {
+        let df = DateFormatter()
+        df.calendar = isoCalendar
+        df.locale = .current
+        df.dateStyle = .long
+        return df.string(from: selectedDate)
+    }
+
+    private var pointsText: String {
+        String(appState.childPointsTotal(childId: childId))
+    }
+
+    // MARK: - Data helpers
+    private var tasksForSelectedDay: [TaskAssignment] {
+        appState.assignments(for: childId, on: selectedDate)
+    }
+    private var eventsForSelectedDay: [EventAssignment] {
+        appState.events(for: childId, on: selectedDate)
+    }
+    private var eventIdsForSelectedDay: Set<UUID> { Set(eventsForSelectedDay.map(\.id)) }
+
+    private var linkedTasksForSelectedDay: [TaskAssignment] {
+        tasksForSelectedDay.filter { $0.linkedEventAssignmentId.flatMap(eventIdsForSelectedDay.contains) ?? false }
+    }
+    private var unlinkedTasksForSelectedDay: [TaskAssignment] {
+        tasksForSelectedDay.filter { assignment in
+            guard let evId = assignment.linkedEventAssignmentId else { return true }
+            return !eventIdsForSelectedDay.contains(evId)
+        }
+    }
+
+    private func effectiveTime(for task: TaskAssignment) -> Date? { task.startTime ?? task.finishTime }
+    private func effectiveTime(for event: EventAssignment) -> Date? { event.startTime ?? event.finishTime }
+    private func timeOfDayKey(_ time: Date?) -> Int? {
+        guard let time else { return nil }
+        let comps = isoCalendar.dateComponents([.hour, .minute], from: time)
+        return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+    }
+    private func taskTimeKey(_ task: TaskAssignment) -> Int? { timeOfDayKey(effectiveTime(for: task)) }
+    private func eventTimeKey(_ event: EventAssignment) -> Int? { timeOfDayKey(effectiveTime(for: event)) }
+
+    private var eventsSortedForDisplay: [EventAssignment] {
+        eventsForSelectedDay.sorted { a, b in
+            if a.isActive != b.isActive { return a.isActive && !b.isActive }
+            let ta = eventTimeKey(a); let tb = eventTimeKey(b)
+            switch (ta, tb) {
+            case (nil, nil): break
+            case (nil, _?): return false
+            case (_?, nil): return true
+            case (let x?, let y?): if x != y { return x < y }
+            }
+            return a.eventTitle.localizedCaseInsensitiveCompare(b.eventTitle) == .orderedAscending
+        }
+    }
+
+    private func linkedTasks(for eventId: UUID) -> [TaskAssignment] {
+        linkedTasksForSelectedDay
+            .filter { $0.linkedEventAssignmentId == eventId }
+            .sorted { a, b in
+                if a.isActive != b.isActive { return a.isActive && !b.isActive }
+                let ta = taskTimeKey(a); let tb = taskTimeKey(b)
+                switch (ta, tb) {
+                case (nil, nil): break
+                case (nil, _?): return false
+                case (_?, nil): return true
+                case (let x?, let y?): if x != y { return x < y }
+                }
+                return a.taskTitle.localizedCaseInsensitiveCompare(b.taskTitle) == .orderedAscending
+            }
+    }
+
+    private var unlinkedTasksSortedForDisplay: [TaskAssignment] {
+        unlinkedTasksForSelectedDay.sorted { a, b in
+            if a.isActive != b.isActive { return a.isActive && !b.isActive }
+            let ta = taskTimeKey(a); let tb = taskTimeKey(b)
+            switch (ta, tb) {
+            case (nil, nil): break
+            case (nil, _?): return false
+            case (_?, nil): return true
+            case (let x?, let y?): if x != y { return x < y }
+            }
+            return a.taskTitle.localizedCaseInsensitiveCompare(b.taskTitle) == .orderedAscending
+        }
+    }
+
+    private enum AgendaSection: Hashable { case tasks, events }
+
+    private var earliestStandaloneTaskKey: Int? {
+        unlinkedTasksForSelectedDay.compactMap { taskTimeKey($0) }.min()
+    }
+    private var earliestEventBlockKey: Int? {
+        let perEventEarliest: [Int] = eventsForSelectedDay.compactMap { ev in
+            var keys: [Int] = []
+            if let k = eventTimeKey(ev) { keys.append(k) }
+            keys.append(contentsOf: linkedTasks(for: ev.id).compactMap { taskTimeKey($0) })
+            return keys.min()
+        }
+        return perEventEarliest.min()
+    }
+
+    private var agendaSectionOrder: [AgendaSection] {
+        let t = earliestStandaloneTaskKey
+        let e = earliestEventBlockKey
+        if t == nil && e == nil { return [.tasks, .events] }
+        if let t, let e { return (t <= e) ? [.tasks, .events] : [.events, .tasks] }
+        if t != nil { return [.tasks, .events] }
+        return [.events, .tasks]
+    }
+
+    private var standaloneTasksSectionTitle: String {
+        guard !eventsForSelectedDay.isEmpty else { return "Tasks" }
+        return (agendaSectionOrder.first == .events) ? "Other Tasks" : "Tasks"
+    }
+
+    // MARK: - Toast helper
+    private func showToast(_ message: String) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+            toastMessage = message
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                toastMessage = nil
+            }
+        }
+    }
+
+    // MARK: - Body
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                CurvyAquaBlueBackground(animate: true)
+
+                VStack(spacing: 0) {
+                    headerCluster
+                        .padding(.horizontal)
+
+                    ZStack {
+                        LowerContentSweep()
+                        VStack(spacing: 6) {  // Option-B spacing
+                            dayStripPager
+                            agendaArea
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+
+                // Sheets (unchanged)
+                .sheet(isPresented: $showAssignTaskSheet) {
+                    AssignTaskToChildView(
+                        childId: childId,
+                        defaultStartDate: selectedDate,
+                        onShowWeeklyToast: { showToast($0) }
+                    )
+                    .environmentObject(appState)
+                }
+                .sheet(isPresented: $showAssignEventSheet) {
+                    AssignEventToChildView(
+                        childId: childId,
+                        defaultStartDate: selectedDate,
+                        onShowWeeklyToast: { showToast($0) }
+                    )
+                    .environmentObject(appState)
+                }
+                .sheet(item: $assignmentToEdit) { assignment in
+                    EditTaskAssignmentView(assignment: assignment).environmentObject(appState)
+                }
+                .sheet(item: $eventToEdit) { event in
+                    EditEventAssignmentView(assignment: event).environmentObject(appState)
+                }
+                .sheet(item: $completionToPreview) { comp in
+                    PhotoEvidenceViewer(completion: comp, taskTitle: viewerTaskTitle)
+                }
+
+                if let toastMessage {
+                    ToastBannerView(message: toastMessage)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(10)
+                }
+            }
+            .onAppear { selectedDate = isoCalendar.startOfDay(for: today) }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarHidden(true)
+        }
+    }
+
+    // MARK: - Header cluster
+    private var headerCluster: some View {
+        VStack(spacing: 6) {
+            if let child {
+                ChildHeaderView(
+                    child: child,
+                    points: appState.childPointsTotal(childId: childId)
+                )
+            }
+
+            Text(headerSelectedDayText)
+                .font(.system(size: 36, weight: .regular))
+                .foregroundStyle(FuturistTheme.textPrimary)
+                .padding(.top, 2)
+
+            HStack(spacing: 8) {
+                Text(headerSelectedDateText)
+                    .font(.subheadline)
+                    .foregroundStyle(FuturistTheme.textSecondary)
+
+                Spacer(minLength: 8)
+
+                Button("Today") {
+                    jumpToToday()
+                }
+                .font(.footnote.weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .foregroundStyle(Color.white)
+                .background(Color.white.opacity(0.25), in: Capsule())
+                .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1))
+                .accessibilityLabel("Jump to today")
+            }
+        }
+    }
+
+    // MARK: - 🔹 Sliding calendar with brighter weekday colours (only change)
+    private var dayStripPager: some View {
+        ScrollableDayStrip(
+            selectedDate: $selectedDate,
+            calendar: isoCalendar
+        )
+        // Bright, cool white/blue so weekday names and dates stand out clearly
+        .tint(Color(red: 0.88, green: 0.96, blue: 1.00))
+        .brightness(0.14)    // luminance lift
+        .contrast(1.24)      // edge clarity
+        .saturation(1.12)    // slight colour intensity
+        .frame(height: 70)
+        .padding(.bottom, -10)
+    }
+
+    // MARK: - Agenda area (Lists themed like child)
+    private var agendaArea: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if tasksForSelectedDay.isEmpty && eventsForSelectedDay.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer(minLength: 16)
+                    Text("No tasks or events assigned for this day.")
+                        .foregroundStyle(FuturistTheme.textSecondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(agendaSectionOrder, id: \.self) { section in
+                        switch section {
+                        case .tasks:
+                            if !unlinkedTasksSortedForDisplay.isEmpty {
+                                Section {
+                                    let items = unlinkedTasksSortedForDisplay
+                                    ForEach(Array(items.enumerated()), id: \.element.id) { index, assignment in
+                                        let completion = appState.completionRecord(for: assignment.id, on: selectedDate)
+
+                                        VStack(spacing: 0) {
+                                            TaskAssignmentRow(
+                                                assignment: assignment,
+                                                selectedDate: selectedDate,
+                                                isCompleted: completion != nil,
+                                                completionForSelectedDay: completion,
+                                                onToggleComplete: {
+                                                    appState.toggleCompletion(assignmentId: assignment.id, on: selectedDate)
+                                                },
+                                                onTap: { assignmentToEdit = assignment },
+                                                onViewPhoto: {
+                                                    guard let comp = completion, comp.hasPhotoEvidence else { return }
+                                                    viewerTaskTitle = assignment.taskTitle
+                                                    completionToPreview = comp
+                                                },
+                                                headlineColor: FuturistTheme.textPrimary,
+                                                metaColor: FuturistTheme.textSecondary
+                                            )
+                                        }
+                                        .padding(.bottom, Self.ruleExtraBottomPadding)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                                        .listRowSeparator(.hidden)
+                                        .listRowBackground(CardBackground())
+                                        .overlay(alignment: .bottomLeading) {
+                                            if index < items.count - 1 {
+                                                TaskRowGradientRule(
+                                                    leadingInset: Self.ruleLeadingInset,
+                                                    trailingInset: Self.ruleTrailingInset,
+                                                    thickness: 2
+                                                )
+                                                .offset(y: Self.ruleVerticalOffset)
+                                            }
+                                        }
+                                    }
+                                    .onDelete { indexSet in
+                                        for idx in indexSet {
+                                            let a = unlinkedTasksSortedForDisplay[idx]
+                                            appState.deleteTaskAssignment(id: a.id)
+                                        }
+                                    }
+                                } header: {
+                                    Text(standaloneTasksSectionTitle)
+                                        .foregroundStyle(FuturistTheme.textPrimary)
+                                        .textCase(nil)
+                                        .padding(.top, Self.headerTopPadding)
+                                        .padding(.bottom, Self.headerBottomPadding)
+                                }
+                            }
+
+                        case .events:
+                            if !eventsSortedForDisplay.isEmpty {
+                                Section {
+                                    let items = eventsSortedForDisplay
+                                    ForEach(Array(items.enumerated()), id: \.element.id) { index, event in
+                                        VStack(spacing: 0) {
+                                            EventAssignmentRow(
+                                                event: event,
+                                                onTap: { eventToEdit = event },
+                                                headlineColor: FuturistTheme.textPrimary,
+                                                metaColor: FuturistTheme.textSecondary
+                                            )
+                                        }
+                                        .padding(.bottom, Self.ruleExtraBottomPadding)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                                        .listRowSeparator(.hidden)
+                                        .listRowBackground(CardBackground())
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+  

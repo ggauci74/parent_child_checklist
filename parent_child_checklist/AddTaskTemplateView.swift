@@ -1,8 +1,8 @@
 //
-//  AddTaskTemplateView.swift
-//  parent_child_checklist
+// AddTaskTemplateView.swift
+// parent_child_checklist
 //
-//  Created by George Gauci on 10/2/2026.
+// Created by George Gauci on 10/2/2026.
 //
 
 import SwiftUI
@@ -12,14 +12,17 @@ struct AddTaskTemplateView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
+    // NEW: Callbacks so the presenting view (e.g., SelectTaskTemplateView) can react
+    var onSaved: ((TaskTemplate) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
+
     @State private var title: String = ""
-    @State private var searchText: String = ""
     @State private var selectedEmoji: String? = nil
     @State private var selectedCategory: EmojiCatalog.Category = .all
     @State private var validationMessage: String? = nil
     @FocusState private var titleFocused: Bool
 
-    // ✅ NEW: Reward points (default 1)
+    // ✅ Reward points (default 1)
     @State private var rewardPoints: Int = 1
 
     // Sheet
@@ -46,12 +49,6 @@ struct AddTaskTemplateView: View {
         }
     }
 
-    private var filteredEmojis: [String] {
-        let q = searchText.trimmed
-        if q.isEmpty { return baseEmojis }
-        return baseEmojis.filter { $0.contains(q) }
-    }
-
     var body: some View {
         NavigationStack {
             Form {
@@ -72,12 +69,11 @@ struct AddTaskTemplateView: View {
                     }
                 }
 
-                // ✅ NEW: Reward Points UI
+                // ✅ Reward Points UI
                 Section("Reward Points") {
                     HStack {
                         Text("💎 Points")
                         Spacer()
-
                         Button {
                             rewardPoints = max(0, rewardPoints - 1)
                         } label: {
@@ -120,14 +116,10 @@ struct AddTaskTemplateView: View {
                         }
                     }
 
-                    TextField("Search", text: $searchText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-
-                    // ✅ Stable layout inside Form
+                    // Grid of emojis (no search box)
                     ScrollView {
                         LazyVGrid(columns: gridColumns, spacing: 10) {
-                            ForEach(filteredEmojis, id: \.self) { emoji in
+                            ForEach(baseEmojis, id: \.self) { emoji in
                                 Button {
                                     selectedEmoji = emoji
                                     validationMessage = nil
@@ -166,7 +158,10 @@ struct AddTaskTemplateView: View {
             .navigationTitle("Add Task")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        onCancel?()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
@@ -199,7 +194,6 @@ struct AddTaskTemplateView: View {
                     selectedEmoji = picked
                     // Convenience: switch category to My Emojis after picking
                     selectedCategory = .myEmojis
-                    searchText = ""
                 }
                 .environmentObject(appState)
             }
@@ -209,33 +203,30 @@ struct AddTaskTemplateView: View {
                 }
             }
             .onChange(of: title) { _, _ in validationMessage = nil }
-            .onChange(of: selectedCategory) { _, _ in
-                searchText = ""
-            }
         }
     }
 
     private func save() {
         validationMessage = nil
-
         guard !trimmedTitle.isEmpty else {
             validationMessage = "Please enter a task title."
             return
         }
-
         guard !isDuplicate else {
             validationMessage = "That task already exists. Please choose a different name."
             return
         }
-
         guard let emoji = selectedEmoji, !emoji.trimmed.isEmpty else {
             validationMessage = "Please select an emoji."
             return
         }
-
         let points = max(0, rewardPoints)
 
-        if appState.createTaskTemplate(title: trimmedTitle, iconSymbol: emoji, rewardPoints: points) != nil {
+        // Change: capture the created template and pass it back via onSaved
+        if let created = appState.createTaskTemplate(title: trimmedTitle,
+                                                     iconSymbol: emoji,
+                                                     rewardPoints: points) {
+            onSaved?(created)
             dismiss()
         } else {
             validationMessage = "Couldn’t create task. Please try again."

@@ -4,10 +4,6 @@
 //
 //  Created by George Gauci on 8/2/2026.
 //
-//
-// SelectEventTemplateView.swift
-// parent_child_checklist
-//
 
 import SwiftUI
 
@@ -19,6 +15,10 @@ struct SelectEventTemplateView: View {
     let onPick: (EventTemplate) -> Void
 
     @State private var searchText: String = ""
+
+    // NEW: add/create + edit states
+    @State private var showAddTemplate = false
+    @State private var editingTemplate: EventTemplate? = nil
 
     private var templates: [EventTemplate] {
         let sorted = appState.eventTemplates.sorted {
@@ -32,8 +32,14 @@ struct SelectEventTemplateView: View {
     var body: some View {
         List {
             if templates.isEmpty {
-                Text("No events yet. Create events in the Events tab first.")
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("No events yet.")
+                        .font(.headline)
+                    Text("Tap the + in the top‑right to create your first event template.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 8)
             } else {
                 ForEach(templates) { tpl in
                     Button {
@@ -42,9 +48,12 @@ struct SelectEventTemplateView: View {
                     } label: {
                         HStack(spacing: 12) {
                             TaskEmojiIconView(icon: tpl.iconSymbol, size: 22)
+
                             Text(tpl.title)
                                 .font(.headline)
+
                             Spacer()
+
                             if selectedTemplateId == tpl.id {
                                 Image(systemName: "checkmark")
                                     .foregroundStyle(.tint)
@@ -53,6 +62,21 @@ struct SelectEventTemplateView: View {
                         .padding(.vertical, 4)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            editingTemplate = tpl
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button {
+                            editingTemplate = tpl
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        .tint(.blue)
+                    }
                 }
             }
         }
@@ -63,6 +87,44 @@ struct SelectEventTemplateView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button("Close") { dismiss() }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showAddTemplate = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.headline)
+                        .accessibilityLabel("New Event Template")
+                }
+            }
+        }
+
+        // NEW: Create flow
+        .sheet(isPresented: $showAddTemplate) {
+            AddEventTemplateView(
+                onSaved: { created in
+                    onPick(created)
+                    dismiss()
+                },
+                onCancel: {
+                    // No-op; just close the sheet
+                }
+            )
+            .environmentObject(appState)
+        }
+
+        // NEW: Edit flow
+        .sheet(item: $editingTemplate) { tpl in
+            EditEventTemplateView(
+                template: tpl,
+                onSaved: { updated in
+                    onPick(updated)
+                    dismiss()
+                },
+                onCancel: {
+                    // No-op; just close the sheet
+                }
+            )
+            .environmentObject(appState)
         }
     }
 }

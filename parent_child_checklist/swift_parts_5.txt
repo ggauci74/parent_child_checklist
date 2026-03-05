@@ -1,0 +1,1793 @@
+.move(edge: .top).combined(with: .opacity))
+                        .zIndex(10) // ✅ SwiftUI uses .zIndex(_:)
+                }
+            }
+        }
+    }
+
+    // MARK: - Sections / Subviews
+
+    private var balancesSection: some View {
+        Section("Balances") {
+            if appState.children.isEmpty {
+                Text("No children yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(appState.children.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })) { child in
+                    balanceRow(for: child)
+                }
+            }
+        }
+    }
+
+    private var filtersHeader: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                // Status segmented control with counts
+                Picker("Status", selection: $selectedStatus) {
+                    Text("Pending (\(pendingCount))").tag(StatusScope.pending)
+                    Text("Approved (\(approvedCount))").tag(StatusScope.approved)
+                    Text("Claimed (\(claimedCount))").tag(StatusScope.claimed)
+                }
+                .pickerStyle(.segmented)
+
+                // Child filter (compact)
+                HStack(spacing: 10) {
+                    Text("Child")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("Child", selection: Binding(
+                        get: { selectedChildId ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000") ?? UUID() },
+                        set: { newValue in
+                            // special sentinel UUID = All Children
+                            if newValue.uuidString == "00000000-0000-0000-0000-000000000000" {
+                                selectedChildId = nil
+                            } else {
+                                selectedChildId = newValue
+                            }
+                        })) {
+                        Text("All Children").tag(UUID(uuidString: "00000000-0000-0000-0000-000000000000") ?? UUID())
+                        ForEach(appState.children) { child in
+                            Text(child.name).tag(child.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+            }
+            .textCase(nil)
+        }
+    }
+
+    private var emptyStateText: String {
+        let base = "\(selectedStatus.rawValue) requests"
+        if let cid = selectedChildId, !childName(cid).isEmpty {
+            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "No \(base.lowercased()) for \(childName(cid))."
+            } else {
+                return "No \(base.lowercased()) for \(childName(cid)) matching “\(searchText)”."
+            }
+        } else {
+            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "No \(base.lowercased()) to display."
+            } else {
+                return "No \(base.lowercased()) matching “\(searchText)”."
+            }
+        }
+    }
+
+    private func childHeaderText(_ child: ChildProfile?) -> String {
+        child?.name ?? "Child"
+    }
+
+    private func childName(_ id: UUID) -> String {
+        appState.children.first(where: { $0.id == id })?.name ?? "Child"
+    }
+
+    // MARK: - Balances row
+    @ViewBuilder
+    private func balanceRow(for child: ChildProfile) -> some View {
+        let total = appState.childPointsTotal(childId: child.id)
+        HStack(spacing: 12) {
+            // Child name
+            Text(child.name)
+                .font(.headline)
+            Spacer()
+            // Current balance
+            HStack(spacing: 6) {
+                Text("💎")
+                Text("\(total)")
+                    .fontWeight(.semibold)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+
+            // Minus
+            Button {
+                let ok = appState.adjustChildPoints(childId: child.id, delta: -1)
+                if !ok { showToast("Balance can’t go below 0.") }
+            } label: {
+                Image(systemName: "minus.circle.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.red)
+
+            // Plus
+            Button {
+                _ = appState.adjustChildPoints(childId: child.id, delta: +1)
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+
+            // History
+            Button {
+                historyChild = child
+            } label: {
+                Label("History", systemImage: "clock.arrow.circlepath")
+                    .labelStyle(.iconOnly)
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("History for \(child.name)")
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(child.name), \(total) gems")
+    }
+
+    // MARK: - Request row
+    @ViewBuilder
+    private func buttonRow(for req: RewardRequest) -> some View {
+        Button { selected = req } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(childName(req.childId))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    statusPill(req.status)
+                }
+                Text(req.title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(statusDateLine(for: req))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if let cost = req.approvedCost, cost > 0,
+                   (req.status == .approved || req.status == .claimed) {
+                    HStack(spacing: 4) {
+                        Text("💎")
+                        Text("\(cost)").fontWeight(.semibold)
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                _ = appState.deleteRewardRequest(id: req.id)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    private func statusDateLine(for req: RewardRequest) -> String {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .none
+        switch req.status {
+        case .claimed:
+            if let d = req.claimedAt { return "Claimed on \(df.string(from: d))" }
+            if let d = req.approvedAt { return "Approved on \(df.string(from: d))" }
+            if let d = req.notApprovedAt { return "Not this time on \(df.string(from: d))" }
+            return "Requested on \(df.string(from: req.requestedAt))"
+        case .approved:
+            if let d = req.approvedAt { return "Approved on \(df.string(from: d))" }
+            return "Requested on \(df.string(from: req.requestedAt))"
+        case .notApproved:
+            if let d = req.notApprovedAt { return "Not this time on \(df.string(from: d))" }
+            return "Requested on \(df.string(from: req.requestedAt))"
+        case .pending:
+            return "Requested on \(df.string(from: req.requestedAt))"
+        }
+    }
+
+    private func statusPill(_ status: RewardRequestStatus) -> some View {
+        let text = status.childDisplay
+        let bg: Color
+        let fg: Color
+        switch status {
+        case .pending:
+            bg = Color.yellow.opacity(0.18); fg = .orange
+        case .approved:
+            bg = Color.green.opacity(0.18); fg = .green
+        case .notApproved:
+            bg = Color.gray.opacity(0.20); fg = .secondary
+        case .claimed:
+            bg = Color.blue.opacity(0.18); fg = .blue
+        }
+        return Text(text)
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(fg)
+            .background(bg, in: Capsule())
+    }
+
+    private func showToast(_ message: String) {
+        let now = Date()
+        guard now.timeIntervalSince(lastToastAt) > 0.8 else { return } // rate-limit
+        lastToastAt = now
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+            localToastMessage = message
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                localToastMessage = nil
+            }
+        }
+    }
+
+    @State private var showNotApprovedSheet = false
+}
+
+// MARK: - “Not this time” quick view (optional sheet for completeness)
+private struct NotApprovedListView: View {
+    let requests: [RewardRequest]
+    let childName: (UUID) -> String
+    let onOpen: (RewardRequest) -> Void
+    let onDelete: (RewardRequest) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if requests.isEmpty {
+                    Section {
+                        Text("No items.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    // group by child
+                    let dict = Dictionary(grouping: requests, by: { $0.childId })
+                    let keys = dict.keys.sorted { childName($0).localizedCaseInsensitiveCompare(childName($1)) == .orderedAscending }
+                    ForEach(keys, id: \.self) { cid in
+                        Section(header: Text(childName(cid))) {
+                            ForEach(dict[cid] ?? []) { req in
+                                Button { onOpen(req) } label: {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(req.title).font(.headline)
+                                        Text(dateLine(req))
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        onDelete(req)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Not this time")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func dateLine(_ req: RewardRequest) -> String {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .none
+        if let d = req.notApprovedAt { return "Marked on \(df.string(from: d))" }
+        return "Requested on \(df.string(from: req.requestedAt))"
+    }
+}
+
+
+===== ./FamilyDataStore.swift =====
+
+//
+//  FamilyDataStore.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+import Foundation
+import CloudKit
+
+/// Loads the family's data from CloudKit into a single snapshot that AppState can apply.
+/// This class does **read-only** work; write/autosave will be added later.
+@MainActor
+final class FamilyDataStore {
+
+    // MARK: Snapshot
+
+    struct Snapshot {
+        var children: [ChildProfile] = []
+        var taskTemplates: [TaskTemplate] = []
+        var taskAssignments: [TaskAssignment] = []
+        var taskCompletions: [TaskCompletionRecord] = []
+        var customEmojis: [String] = []
+        var eventTemplates: [EventTemplate] = []
+        var eventAssignments: [EventAssignment] = []
+        var locations: [LocationItem] = []
+    }
+
+    // MARK: Dependencies
+
+    private let ck: CloudKitService
+    private let coordinator: FamilyCoordinator
+
+    init(containerIdentifier: String? = nil) {
+        self.ck = CloudKitService(config: .init(containerIdentifier: containerIdentifier))
+        self.coordinator = FamilyCoordinator(ck: ck)
+    }
+
+    // MARK: Load
+
+    /// Bootstraps the family (shared → private → create) and loads every record type from the FamilyZone.
+    /// If the zone exists but is empty (first run), returns an empty snapshot.
+    func loadSnapshot() async throws -> Snapshot {
+        // Determine which DB/zone we should read from.
+        let state = try await coordinator.bootstrapFamily()
+
+        let context: FamilyCoordinator.FamilyContext
+        switch state {
+        case .shared(let ctx):        context = ctx
+        case .privateOwner(let ctx):  context = ctx
+        }
+
+        let db = context.database
+        let zoneID = context.zoneID
+
+        // Kick off all fetches in parallel.
+        async let childrenR         = ck.fetchAll(recordType: CKSchema.RecordType.childProfile,     zoneID: zoneID, from: db)
+        async let templatesR        = ck.fetchAll(recordType: CKSchema.RecordType.taskTemplate,     zoneID: zoneID, from: db)
+        async let assignmentsR      = ck.fetchAll(recordType: CKSchema.RecordType.taskAssignment,   zoneID: zoneID, from: db)
+        async let completionsR      = ck.fetchAll(recordType: CKSchema.RecordType.taskCompletion,   zoneID: zoneID, from: db)
+
+        async let eventTemplatesR   = ck.fetchAll(recordType: CKSchema.RecordType.eventTemplate,    zoneID: zoneID, from: db)
+        async let eventAssignmentsR = ck.fetchAll(recordType: CKSchema.RecordType.eventAssignment,  zoneID: zoneID, from: db)
+        async let locationsR        = ck.fetchAll(recordType: CKSchema.RecordType.locationItem,     zoneID: zoneID, from: db)
+
+        // Emoji library is a singleton record
+        async let emojiRecord       = ck.fetchFirst(recordType: CKSchema.RecordType.emojiLibrary,   zoneID: zoneID, from: db)
+
+        // Await and map per type.
+        let children         = try await childrenR.compactMap(ChildProfileMapper.fromRecord)
+        let taskTemplates    = try await templatesR.compactMap(TaskTemplateMapper.fromRecord)
+        let taskAssignments  = try await assignmentsR.compactMap(TaskAssignmentMapper.fromRecord)
+        let taskCompletions  = try await completionsR.compactMap(TaskCompletionRecordMapper.fromRecord)
+
+        let eventTemplates   = try await eventTemplatesR.compactMap(EventTemplateMapper.fromRecord)
+        let eventAssignments = try await eventAssignmentsR.compactMap(EventAssignmentMapper.fromRecord)
+        let locations        = try await locationsR.compactMap(LocationItemMapper.fromRecord)
+
+        // Handle the emoji singleton (no closure; unwrap cleanly).
+        let emojiRec = try await emojiRecord
+        let emojis: [String] = emojiRec.map(EmojiLibraryMapper.fromRecord) ?? []
+
+        return Snapshot(
+            children: children,
+            taskTemplates: taskTemplates,
+            taskAssignments: taskAssignments,
+            taskCompletions: taskCompletions,
+            customEmojis: emojis,
+            eventTemplates: eventTemplates,
+            eventAssignments: eventAssignments,
+            locations: locations
+        )
+    }
+
+    // MARK: Utilities
+
+    /// Consider the snapshot to have "user data" if any of the arrays is non-empty.
+    /// AppState uses this to **avoid** overwriting local JSON with an empty CloudKit snapshot on first run.
+    static func hasUserData(_ s: Snapshot) -> Bool {
+        return !s.children.isEmpty
+            || !s.taskTemplates.isEmpty
+            || !s.taskAssignments.isEmpty
+            || !s.taskCompletions.isEmpty
+            || !s.eventTemplates.isEmpty
+            || !s.eventAssignments.isEmpty
+            || !s.locations.isEmpty
+            || !s.customEmojis.isEmpty
+    }
+}
+
+
+===== ./ChildAvatarSetupView.swift =====
+
+//
+// ChildAvatarSetupView.swift
+// parent_child_checklist
+//
+
+import SwiftUI
+
+// Local theme tokens (mirrors other child screens in this file only)
+private enum FuturistTheme {
+    static let textPrimary   = Color(red: 0.92, green: 0.97, blue: 1.00) // frosted white headline
+    static let textSecondary = Color(red: 0.63, green: 0.73, blue: 0.82) // secondary on dark
+}
+
+// Same CardBackground used on other screens (glass + thin stroke + micro shadow)
+private struct CardBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private let surface      = Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+    private let surfaceSolid = Color(red: 0.05, green: 0.10, blue: 0.22)
+    var cornerRadius: CGFloat = 12
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(reduceTransparency ? surfaceSolid : surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 2)
+    }
+}
+
+// Gentle dark sweep behind the content area (like other child screens)
+private struct LowerContentSweep: View {
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: .clear, location: 0.00),
+                .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.05), location: 0.50),
+                .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.08), location: 1.00)
+            ]),
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+struct ChildAvatarSetupView: View {
+    let childId: UUID
+    // Parent-provided callback used to switch tabs back to Today
+    var onContinue: (() -> Void)? = nil
+
+    @AppStorage("selectedChildId") private var selectedChildIdRaw: String?
+
+    @EnvironmentObject private var appState: AppState
+
+    @State private var selectedAvatarId: String? = nil
+    @State private var errorMessage: String? = nil
+
+    // MARK: - Derived
+    private var child: ChildProfile? {
+        appState.children.first { $0.id == childId }
+    }
+
+    /// Avatars currently used by other children in the family (enforce 1‑per‑child)
+    private var takenAvatarIds: Set<String> {
+        let current = child?.avatarId
+        let allTaken = appState.children.compactMap { $0.avatarId }
+        return Set(allTaken.filter { $0 != current })
+    }
+
+    private var canContinue: Bool { selectedAvatarId != nil }
+
+    // Matches the large page titles used across child screens
+    private let largeTitleSize: CGFloat = 36
+
+    // Grid metrics
+    private let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                // Background to match the rest of the child experience
+                CurvyAquaBlueBackground(animate: true)
+
+                VStack(spacing: 0) {
+                    if let child {
+                        // Shared header (gems + avatar + child name). We pass the in-progress choice for live preview.
+                        ChildHeaderView(
+                            child: child,
+                            points: appState.childPointsTotal(childId: childId),
+                            avatarIdOverride: selectedAvatarId ?? child.avatarId
+                        )
+                        .padding(.horizontal)
+
+                        // Big page title (frosted white)
+                        Text("Select Avatar")
+                            .font(.system(size: largeTitleSize, weight: .regular))
+                            .foregroundStyle(FuturistTheme.textPrimary)
+                            .padding(.top, 2)
+
+                        ZStack {
+                            LowerContentSweep()
+
+                            VStack(spacing: 12) {
+                                // Avatar grid inside a dark card
+                                VStack(alignment: .leading, spacing: 12) {
+                                    LazyVGrid(columns: gridColumns, spacing: 12) {
+                                        ForEach(AvatarCatalog.all) { avatar in
+                                            avatarTile(avatar: avatar,
+                                                       isTaken: takenAvatarIds.contains(avatar.id),
+                                                       isSelected: selectedAvatarId == avatar.id,
+                                                       ringHex: child.colorHex)
+                                        }
+                                    }
+                                }
+                                .padding(12)
+                                .background(CardBackground())
+                                .padding(.horizontal)
+
+                                if let errorMessage {
+                                    Text(errorMessage)
+                                        .font(.footnote)
+                                        .foregroundStyle(.red)
+                                        .padding(.horizontal)
+                                }
+
+                                // Accent "Continue" button (same look as other screens)
+                                Button {
+                                    continueTapped()
+                                } label: {
+                                    Text("Continue")
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal)
+                                .disabled(!canContinue)
+                                .opacity(canContinue ? 1.0 : 0.55)
+
+                                Spacer(minLength: 10)
+                            }
+                            .padding(.top, 6) // medium-tight rhythm under the title
+                        }
+                    } else {
+                        // Fallback if child profile is not found
+                        VStack {
+                            Spacer()
+                            Text("That child profile can’t be found.")
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                            Spacer()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarHidden(true)
+        }
+        .onAppear {
+            // Prefill with current avatar so the header shows it immediately
+            selectedAvatarId = child?.avatarId
+        }
+    }
+
+    // MARK: - Avatar Tile
+    @ViewBuilder
+    private func avatarTile(avatar: AvatarCatalog.Avatar,
+                            isTaken: Bool,
+                            isSelected: Bool,
+                            ringHex: String) -> some View {
+        Button {
+            guard !isTaken else { return }
+            selectedAvatarId = avatar.id
+            errorMessage = nil
+        } label: {
+            VStack(spacing: 8) {
+                // Reuse your circular avatar with the child-colour ring
+                ChildAvatarCircleView(
+                    colorHex: ringHex,
+                    avatarId: avatar.id,
+                    size: 56
+                )
+                .overlay(alignment: .center) {
+                    // Subtle selection halo that does not change layout
+                    if isSelected {
+                        Circle()
+                            .stroke(Color.accentColor.opacity(0.85), lineWidth: 2)
+                            .frame(width: 56 + 10, height: 56 + 10)
+                            .blur(radius: 0.2)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+                Text(avatar.displayName)
+                    .font(.footnote)
+                    .foregroundStyle(isTaken ? FuturistTheme.textSecondary.opacity(0.65)
+                                             : FuturistTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(
+                        isSelected
+                        ? Color.white.opacity(0.06)     // subtle surface when selected
+                        : Color.white.opacity(0.03)     // quiet tile surface on dark card
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(
+                        isSelected
+                        ? Color.accentColor               // selected ring
+                        : Color.white.opacity(0.12),      // quiet border
+                        lineWidth: isSelected ? 2 : 1
+                    )
+            )
+            .opacity(isTaken ? 0.45 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(isTaken)
+        .contentShape(Rectangle())
+        .accessibilityLabel(
+            isTaken
+            ? "\(avatar.displayName), locked"
+            : (isSelected ? "Selected: \(avatar.displayName)" : avatar.displayName)
+        )
+    }
+
+    // MARK: - Save / Continue
+    private func continueTapped() {
+        guard let child = appState.children.first(where: { $0.id == childId }) else { return }
+        guard let selectedAvatarId else { return }
+
+        // Enforce uniqueness via data layer
+        let ok = appState.updateChildAvatar(childId: child.id, newAvatarId: selectedAvatarId)
+        if ok {
+            // Persist selection for child mode
+            selectedChildIdRaw = child.id.uuidString
+
+            // Notify the app that the avatar has been updated (Today screen shows toast)
+            NotificationCenter.default.post(name: .avatarUpdated, object: nil)
+
+            // Ask the parent tab view to jump to Today
+            onContinue?()
+        } else {
+            errorMessage = "That avatar was just taken. Please choose another."
+        }
+    }
+}
+
+
+===== ./NotificationManager.swift =====
+
+//
+// NotificationManager.swift
+// parent_child_checklist
+//
+// Part 3: Local notification scheduling & management.
+// - Requests authorization
+// - Schedules "Notify Me" for Task & Event assignments (Start/Finish)
+// - Cancels/reschedules deterministically by assignment ID & phase
+// - Device routing is done via `audience:` parameter (parent vs child)
+// - Schedules the NEXT upcoming occurrence (non-repeating trigger)
+//   — call `reconcile*` on app launch / foreground / after changes
+//
+
+import Foundation
+import UserNotifications
+
+#if canImport(UIKit)
+import UIKit   // Required for UIApplication on iOS/tvOS
+#endif
+
+// MARK: - Notification audience (who this device should schedule for)
+enum NotificationAudience {
+    case parent
+    case child
+}
+
+// MARK: - Internal kinds/phases for stable identifiers
+private enum AssignmentKind: String {
+    case task
+    case event
+}
+
+private enum Phase: String {
+    case start
+    case finish
+}
+
+// MARK: - Notification Manager
+
+final class NotificationManager: NSObject {
+    static let shared = NotificationManager()
+    private override init() {
+        super.init()
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    // MARK: - Public API: Authorization
+
+    /// Asks the system for notification permission (only once is typical).
+    func requestAuthorizationIfNeeded(completion: @escaping (Bool) -> Void = { _ in }) {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                    completion(granted)
+                }
+            case .denied:
+                completion(false)
+            case .authorized, .provisional, .ephemeral:
+                completion(true)
+            @unknown default:
+                completion(false)
+            }
+        }
+    }
+
+    /// Returns current authorization status.
+    func authorizationStatus(completion: @escaping (UNAuthorizationStatus) -> Void) {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            completion(settings.authorizationStatus)
+        }
+    }
+
+    /// Opens system Settings for the app (to enable notifications if denied).
+    func openSystemSettings() {
+        #if canImport(UIKit)
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        DispatchQueue.main.async {
+            // Use the simple overload to avoid the 'nil requires a contextual type' warning
+            UIApplication.shared.open(url)
+        }
+        #else
+        // Non‑UIKit platforms: no-op (or add platform-specific behavior here)
+        #endif
+    }
+
+    // MARK: - Public API: Cancel helpers
+
+    func cancelAllForTask(id: UUID) {
+        let ids = [
+            identifier(kind: .task, id: id, phase: .start),
+            identifier(kind: .task, id: id, phase: .finish)
+        ]
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
+    }
+
+    func cancelAllForEvent(id: UUID) {
+        let ids = [
+            identifier(kind: .event, id: id, phase: .start),
+            identifier(kind: .event, id: id, phase: .finish)
+        ]
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
+    }
+
+    // MARK: - Public API: Schedule NEXT occurrence (Task)
+
+    /// Schedules the NEXT Start/Finish notifications for a TaskAssignment that apply to this device audience.
+    /// - Important: This cancels pending requests for this assignment first (to avoid duplicates),
+    ///              then schedules new ones if eligible (enabled, time present, future).
+    func scheduleNext(for task: TaskAssignment, audience: NotificationAudience) {
+        cancelAllForTask(id: task.id)
+
+        // Start
+        if shouldScheduleStart(task: task, audience: audience),
+           let fireDate = nextStartFireDate(for: task) {
+            schedule(
+                kind: .task,
+                id: task.id,
+                phase: .start,
+                title: "Reminder: \(task.taskTitle)",
+                body: startBodyText(for: task),
+                fireDate: fireDate
+            )
+        }
+
+        // Finish
+        if shouldScheduleFinish(task: task, audience: audience),
+           let fireDate = nextFinishFireDate(for: task) {
+            schedule(
+                kind: .task,
+                id: task.id,
+                phase: .finish,
+                title: "Reminder: \(task.taskTitle)",
+                body: finishBodyText(for: task),
+                fireDate: fireDate
+            )
+        }
+    }
+
+    // MARK: - Public API: Schedule NEXT occurrence (Event)
+
+    /// Schedules the NEXT Start/Finish notifications for an EventAssignment that apply to this device audience.
+    func scheduleNext(for event: EventAssignment, audience: NotificationAudience) {
+        cancelAllForEvent(id: event.id)
+
+        // Start
+        if shouldScheduleStart(event: event, audience: audience),
+           let fireDate = nextStartFireDate(for: event) {
+            schedule(
+                kind: .event,
+                id: event.id,
+                phase: .start,
+                title: "Reminder: \(event.eventTitle)",
+                body: startBodyText(for: event),
+                fireDate: fireDate
+            )
+        }
+
+        // Finish
+        if shouldScheduleFinish(event: event, audience: audience),
+           let fireDate = nextFinishFireDate(for: event) {
+            schedule(
+                kind: .event,
+                id: event.id,
+                phase: .finish,
+                title: "Reminder: \(event.eventTitle)",
+                body: finishBodyText(for: event),
+                fireDate: fireDate
+            )
+        }
+    }
+
+    // MARK: - Public API: Reconcile helpers (batch)
+
+    /// Reconciles all tasks for this device audience: ensures pending notifications match current data
+    /// by canceling & re-scheduling the next upcoming notifications.
+    func reconcileTasks(_ tasks: [TaskAssignment], audience: NotificationAudience) {
+        for t in tasks where t.isActive {
+            scheduleNext(for: t, audience: audience)
+        }
+    }
+
+    /// Reconciles all events for this device audience.
+    func reconcileEvents(_ events: [EventAssignment], audience: NotificationAudience) {
+        for e in events where e.isActive {
+            scheduleNext(for: e, audience: audience)
+        }
+    }
+
+    // MARK: - Recipient routing (Parent vs Child device)
+
+    private func shouldScheduleStart(task: TaskAssignment, audience: NotificationAudience) -> Bool {
+        guard task.startNotifyEnabled, task.startTime != nil else { return false }
+        return isRecipientMatch(task.startNotifyRecipient, audience: audience)
+    }
+
+    private func shouldScheduleFinish(task: TaskAssignment, audience: NotificationAudience) -> Bool {
+        guard task.finishNotifyEnabled, task.finishTime != nil else { return false }
+        return isRecipientMatch(task.finishNotifyRecipient, audience: audience)
+    }
+
+    private func shouldScheduleStart(event: EventAssignment, audience: NotificationAudience) -> Bool {
+        guard event.startNotifyEnabled, event.startTime != nil else { return false }
+        return isRecipientMatch(event.startNotifyRecipient, audience: audience)
+    }
+
+    private func shouldScheduleFinish(event: EventAssignment, audience: NotificationAudience) -> Bool {
+        guard event.finishNotifyEnabled, event.finishTime != nil else { return false }
+        return isRecipientMatch(event.finishNotifyRecipient, audience: audience)
+    }
+
+    private func isRecipientMatch(_ r: NotifyRecipient, audience: NotificationAudience) -> Bool {
+        switch (r, audience) {
+        case (.both, _): return true
+        case (.parent, .parent): return true
+        case (.child, .child):   return true
+        default: return false
+        }
+    }
+
+    // MARK: - Next fire date (Task)
+
+    private func nextStartFireDate(for t: TaskAssignment) -> Date? {
+        guard let base = nextOccurrenceDay(startDate: t.startDate, endDate: t.endDate, occurrence: t.occurrence, weekdays: t.weekdays) else { return nil }
+        guard let time = t.startTime else { return nil }
+        let at = merge(day: base, time: time)
+        let offset = max(0, t.startNotifyOffsetMinutes ?? 0)
+        let fire = Calendar.current.date(byAdding: .minute, value: -offset, to: at) ?? at
+        return fire > Date() ? fire : nil
+    }
+
+    private func nextFinishFireDate(for t: TaskAssignment) -> Date? {
+        guard let base = nextOccurrenceDay(startDate: t.startDate, endDate: t.endDate, occurrence: t.occurrence, weekdays: t.weekdays) else { return nil }
+        guard let time = t.finishTime else { return nil }
+        let at = merge(day: base, time: time)
+        let offset = max(0, t.finishNotifyOffsetMinutes ?? 0)
+        let fire = Calendar.current.date(byAdding: .minute, value: -offset, to: at) ?? at
+        return fire > Date() ? fire : nil
+    }
+
+    // MARK: - Next fire date (Event)
+
+    private func nextStartFireDate(for e: EventAssignment) -> Date? {
+        guard let base = nextOccurrenceDay(startDate: e.startDate, endDate: e.endDate, occurrence: e.occurrence, weekdays: e.weekdays) else { return nil }
+        guard let time = e.startTime else { return nil }
+        let at = merge(day: base, time: time)
+        let offset = max(0, e.startNotifyOffsetMinutes ?? 0)
+        let fire = Calendar.current.date(byAdding: .minute, value: -offset, to: at) ?? at
+        return fire > Date() ? fire : nil
+    }
+
+    private func nextFinishFireDate(for e: EventAssignment) -> Date? {
+        guard let base = nextOccurrenceDay(startDate: e.startDate, endDate: e.endDate, occurrence: e.occurrence, weekdays: e.weekdays) else { return nil }
+        guard let time = e.finishTime else { return nil }
+        let at = merge(day: base, time: time)
+        let offset = max(0, e.finishNotifyOffsetMinutes ?? 0)
+        let fire = Calendar.current.date(byAdding: .minute, value: -offset, to: at) ?? at
+        return fire > Date() ? fire : nil
+    }
+
+    // MARK: - Build content
+
+    private func startBodyText(for t: TaskAssignment) -> String {
+        if let mins = t.startNotifyOffsetMinutes, mins > 0 {
+            return "Starts in \(mins) minute\(mins == 1 ? "" : "s")."
+        }
+        return "Starts now."
+    }
+
+    private func finishBodyText(for t: TaskAssignment) -> String {
+        if let mins = t.finishNotifyOffsetMinutes, mins > 0 {
+            return "Finishes in \(mins) minute\(mins == 1 ? "" : "s")."
+        }
+        return "Finishes now."
+    }
+
+    private func startBodyText(for e: EventAssignment) -> String {
+        if let mins = e.startNotifyOffsetMinutes, mins > 0 {
+            return "Starts in \(mins) minute\(mins == 1 ? "" : "s")."
+        }
+        return "Starts now."
+    }
+
+    private func finishBodyText(for e: EventAssignment) -> String {
+        if let mins = e.finishNotifyOffsetMinutes, mins > 0 {
+            return "Finishes in \(mins) minute\(mins == 1 ? "" : "s")."
+        }
+        return "Finishes now."
+    }
+
+    // MARK: - Core scheduling
+
+    private func schedule(kind: AssignmentKind, id: UUID, phase: Phase, title: String, body: String, fireDate: Date) {
+        // Build trigger date components in current calendar/timezone
+        let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
+
+        // Content
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+
+        // Trigger (non-repeating; we'll re-schedule next occurrence via reconciliation)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+
+        // Request
+        let request = UNNotificationRequest(identifier: identifier(kind: kind, id: id, phase: phase), content: content, trigger: trigger)
+
+        UNUserNotificationCenter.current().add(request) { error in
+            #if DEBUG
+            if let error { print("[NotificationManager] add error:", error) }
+            #endif
+        }
+    }
+
+    // MARK: - ID builder
+
+    private func identifier(kind: AssignmentKind, id: UUID, phase: Phase) -> String {
+        return "\(kind.rawValue)_\(id.uuidString)_\(phase.rawValue)"
+    }
+
+    // MARK: - Occurrence helpers
+
+    /// Returns the next day (start-of-day) on/after "today" (or startDate) that this schedule occurs.
+    /// - For `.onceOnly`: returns `startDate` if >= today, else nil.
+    /// - For `.specifiedDays`: returns next day matching selected weekdays within [startDate, endDate].
+    private func nextOccurrenceDay(startDate: Date, endDate: Date?, occurrence: Any, weekdays: [Int]) -> Date? {
+        let cal = Calendar(identifier: .iso8601)
+        var tzCal = cal
+        tzCal.timeZone = .current
+
+        let today = tzCal.startOfDay(for: Date())
+        let start = max(tzCal.startOfDay(for: startDate), today)
+
+        // Occurrence discriminator via type name (TaskAssignment.Occurrence / EventAssignment.Occurrence)
+        let occRaw: String
+        if let o = occurrence as? TaskAssignment.Occurrence { occRaw = o.rawValue }
+        else if let o = occurrence as? EventAssignment.Occurrence { occRaw = o.rawValue }
+        else { occRaw = "specifiedDays" }
+
+        if occRaw == TaskAssignment.Occurrence.onceOnly.rawValue || occRaw == EventAssignment.Occurrence.onceOnly.rawValue {
+            let candidate = tzCal.startOfDay(for: startDate)
+            return (candidate >= today) ? candidate : nil
+        }
+
+        // specified days
+        guard !weekdays.isEmpty else { return nil }
+        let endBound = endDate.map { tzCal.startOfDay(for: $0) }
+
+        // Search up to 21 days ahead to be safe (should match within a week normally)
+        for i in 0..<21 {
+            guard let cand = tzCal.date(byAdding: .day, value: i, to: start) else { continue }
+            let candDay = tzCal.startOfDay(for: cand)
+            if let endBound, candDay > endBound { return nil }
+            if weekdays.contains(mondayFirstIndex(for: candDay, calendar: tzCal)) {
+                return candDay
+            }
+        }
+        return nil
+    }
+
+    /// Monday-first weekday index: 0=Mon ... 6=Sun
+    private func mondayFirstIndex(for date: Date, calendar: Calendar) -> Int {
+        let weekday = calendar.component(.weekday, from: date)
+        switch weekday {
+        case 2: return 0 // Mon
+        case 3: return 1 // Tue
+        case 4: return 2 // Wed
+        case 5: return 3 // Thu
+        case 6: return 4 // Fri
+        case 7: return 5 // Sat
+        default: return 6 // Sun
+        }
+    }
+
+    /// Combines date-only (day) with time (hour/minute).
+    private func merge(day: Date, time: Date) -> Date {
+        let cal = Calendar.current
+        let d = cal.dateComponents([.year, .month, .day], from: day)
+        let t = cal.dateComponents([.hour, .minute], from: time)
+
+        var combined = DateComponents()
+        combined.year = d.year
+        combined.month = d.month
+        combined.day = d.day
+        combined.hour = t.hour
+        combined.minute = t.minute
+        combined.second = 0
+
+        return cal.date(from: combined) ?? day
+    }
+}
+
+// MARK: - UNUserNotificationCenterDelegate (optional behaviors)
+
+extension NotificationManager: UNUserNotificationCenterDelegate {
+    // Present notifications while the app is in the foreground (banner + sound).
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
+    }
+
+    // After a notification is delivered, you *may* want to immediately schedule the next occurrence here.
+    // For v1, we'll keep it simple and rely on reconcile at app launch/foreground.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        completionHandler()
+    }
+}
+
+
+===== ./EmojiCatalog.swift =====
+
+//
+//  EmojiCatalog.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+
+//
+//  EmojiCatalog.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+import Foundation
+
+/// Kid-friendly emoji catalog grouped by categories.
+/// Use `EmojiCatalog.emojis(for:)` to retrieve a list per category.
+/// `EmojiCatalog.allEmojis` returns a de-duplicated, sorted list of all emojis.
+enum EmojiCatalog {
+
+    enum Category: String, CaseIterable, Identifiable {
+        case all = "All"
+        case myEmojis = "My Emojis"   // Placeholder for user-added/custom emojis (if/when you wire it up)
+        case morning = "Morning"
+        case hygiene = "Hygiene"
+        case school = "School"
+        case chores = "Chores"
+        case food = "Food"
+        case pets = "Pets"
+        case sports = "Sports"
+        case time = "Time"
+        case rewards = "Fun"
+        case health = "Health"
+        case outdoors = "Outdoors"
+
+        var id: String { rawValue }
+    }
+
+    static func emojis(for category: Category) -> [String] {
+        if category == .all { return allEmojis }
+        return categoryMap[category] ?? allEmojis
+    }
+
+    /// De-duplicated + sorted flat list of all emojis from the category map.
+    static let allEmojis: [String] = Array(Set(categoryMap.values.flatMap { $0 }))
+        .sorted()
+
+    // MARK: - Curated categories (adjust anytime)
+    private static let categoryMap: [Category: [String]] = [
+        .morning:  ["☀️","🌤️","🌙","⭐️","⏰","🛏️","🧸","🧦","👕","🪥"],
+        .hygiene:  ["🪥","🧴","🧼","🧻","🧽","🪒","🚿","🛁","💧","🧹","🪮"],
+        .school:   ["🎒","📚","📖","✏️","🖊️","🖍️","📐","📏","🧠","🧪","🔬","🧾","📅"],
+        .chores:   ["✅","☑️","🧹","🧺","🧼","🧽","🗑️","♻️","🔧","🪛","🪣","🧤","🪠"],
+        .food:     ["🍎","🍌","🍇","🍓","🥕","🥪","🍳","🥣","🍽️","🥛","🥃","🍞","🍕","🍪"],
+        .pets:     ["🐶","🐱","🐰","🐹","🐦","🐠","🐢","🐴","🐾","🦄","🧶"],
+        .sports:   ["⚽️","🏀","🏈","🎾","🏐","🏓","🥋","🏊‍♂️","🚴‍♂️","🛹","🏆","🥇"],
+        .time:     ["⏱️","⏳","🕒","🗓️","📅","🔔","📌"],
+        .rewards:  ["🎮","🎧","🎨","🎭","🎲","🎁","🍿","🍦","🎂","🎉","🥳","🚙","👑","🌈","✨","💎"],
+        .health:   ["💊","🩹","🩺","❤️","🧘‍♂️","🥗","💧"],
+        .outdoors: ["🌳","🌿","🍃","🌸","🏞️","⛰️","🌊","☔️","❄️","🔥","🚶‍♂️","🚲","📸"],
+        .all:      []
+    ]
+}
+
+===== ./ChildHeaderView.swift =====
+
+//
+//  ChildHeaderView.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 20/2/2026.
+//
+
+
+//
+// ChildHeaderView.swift
+// parent_child_checklist
+//
+// Reusable child header used across the Child screens:
+// - Left-aligned gems (💎 36pt + 36pt bold number)
+// - Centered avatar (default 88pt, with optional override avatarId for live preview)
+// - Child name (36pt heavy) below the avatar
+//
+
+import SwiftUI
+
+struct ChildHeaderView: View {
+    // Required
+    let child: ChildProfile
+    let points: Int
+
+    // Optional: lets Avatar screen show the in-progress selection
+    var avatarIdOverride: String? = nil
+
+    // Styling (kept here so future tuning is centralized)
+    var nameFontSize: CGFloat = 36
+    var avatarSize: CGFloat = 88
+
+    // Tiny spacing tweak for shorter devices (same behaviour as other screens)
+    private var isSmallHeight: Bool {
+        UIScreen.main.bounds.height <= 700
+    }
+
+    private var pointsText: String {
+        String(points)
+    }
+
+    var body: some View {
+        VStack(spacing: isSmallHeight ? 10 : 8) {
+            ZStack {
+                // Left-aligned gems — 36pt diamond + 36pt bold number
+                HStack(spacing: 6) {
+                    Text("💎")
+                        .font(.system(size: 36))
+                    Text(pointsText)
+                        .font(.system(size: 36, weight: .bold))
+                    Spacer()
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Reward points \(pointsText)")
+
+                // Centered avatar — 88pt by default.
+                // If avatarIdOverride is provided, show that (used by Avatar screen live preview).
+                ChildAvatarCircleView(
+                    colorHex: child.colorHex,
+                    avatarId: avatarIdOverride ?? child.avatarId,
+                    size: avatarSize
+                )
+            }
+            .padding(.top, 8)
+            .padding(.bottom, isSmallHeight ? 6 : 0)
+
+            // Child name — 36pt heavy
+            Text(child.name)
+                .font(.system(size: nameFontSize, weight: .heavy))
+                .lineLimit(1)
+        }
+    }
+}
+
+
+===== ./EditTaskAssignmentView.swift =====
+
+import SwiftUI
+import UIKit
+
+// MARK: - Futurist theme (shared with Assign)
+private enum FuturistTheme {
+    static let skyTop     = Color(red: 0.02, green: 0.06, blue: 0.16)   // deep navy
+    static let skyBottom  = Color(red: 0.01, green: 0.03, blue: 0.10)
+    static let neonAqua   = Color(red: 0.20, green: 0.95, blue: 1.00)   // bright cyan
+
+    static let textPrimary   = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary = Color.white.opacity(0.78)
+    static let chipBorder    = Color.white.opacity(0.25)
+    static let chipDisabled  = Color.white.opacity(0.55)
+    static let cardStroke    = Color.white.opacity(0.08)
+    static let divider       = Color.white.opacity(0.10)
+    static let cardShadow    = Color.black.opacity(0.10)
+
+    static let softRedBase    = Color(red: 1.00, green: 0.36, blue: 0.43)
+    static let softGreenBase  = Color(red: 0.27, green: 0.89, blue: 0.54)
+    static let softRedLight   = Color(red: 1.00, green: 0.58, blue: 0.63)
+    static let softGreenLight = Color(red: 0.62, green: 0.95, blue: 0.73)
+}
+
+// MARK: - Frosted “glass” card (parity with Assign)
+private struct FrostedCard<Content: View>: View {
+    let content: Content
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    private var surface: some ShapeStyle {
+        reduceTransparency
+        ? Color(red: 0.05, green: 0.10, blue: 0.22)
+        : Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) { content }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .background(surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(FuturistTheme.cardStroke, lineWidth: 1)
+            )
+            .shadow(color: FuturistTheme.cardShadow, radius: 6, x: 0, y: 2)
+    }
+}
+
+// MARK: - Bright cyan separator (stand-alone line, same insets)
+private struct BrightLineSeparator: View {
+    var leadingInset: CGFloat = 16
+    var trailingInset: CGFloat = 14
+    var thickness: CGFloat = 2
+
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 0.00),
+                .init(color: FuturistTheme.neonAqua,             location: 0.50),
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 1.00),
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(height: thickness)
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, leadingInset)
+        .padding(.trailing, trailingInset)
+        .padding(.horizontal, 12)
+        .zIndex(2)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Top bar pills + “Edit Task” title (same sizing as Assign)
+private struct ToolbarPillButton: View {
+    let label: String
+    var foreground: Color
+    var background: Color
+    var stroke: Color
+    var disabled: Bool = false
+    var glow: Bool = false
+    var fixedWidth: CGFloat? = 76
+    var fixedHeight: CGFloat? = 32
+    var action: () -> Void
+
+    var body: some View {
+        Text(label)
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.9)
+            .foregroundStyle(foreground)
+            .frame(width: fixedWidth, height: fixedHeight)
+            .background(Capsule().fill(background))
+            .overlay(Capsule().stroke(stroke, lineWidth: 1))
+            .shadow(color: glow ? background.opacity(0.28) : .clear, radius: glow ? 3 : 0)
+            .opacity(disabled ? 0.75 : 1.0)
+            .contentShape(Capsule())
+            .onTapGesture { if !disabled { action() } }
+            .accessibilityAddTraits(.isButton)
+    }
+}
+
+private struct EditTopBar: View {
+    let canSave: Bool
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    var body: some View {
+        ZStack {
+            Text("Edit Task")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(FuturistTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .accessibilityAddTraits(.isHeader)
+
+            HStack {
+                ToolbarPillButton(
+                    label: "Cancel",
+                    foreground: .white,
+                    background: FuturistTheme.softRedLight,
+                    stroke: FuturistTheme.softRedBase.opacity(0.75),
+                    action: onCancel
+                )
+                Spacer(minLength: 12)
+                ToolbarPillButton(
+                    label: "Save",
+                    foreground: canSave ? Color.black.opacity(0.9) : FuturistTheme.textSecondary,
+                    background: canSave ? FuturistTheme.softGreenLight : Color.clear,
+                    stroke: canSave ? FuturistTheme.softGreenBase.opacity(0.75)
+                                    : FuturistTheme.textSecondary.opacity(0.35),
+                    disabled: !canSave,
+                    glow: canSave,
+                    action: onSave
+                )
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .background(Color.clear)
+    }
+}
+
+// MARK: - Neon toggle + rows + chips
+private struct NeonOutlineToggleStyle: ToggleStyle {
+    var onTint: Color = FuturistTheme.neonAqua
+    var offStroke: Color = FuturistTheme.neonAqua.opacity(0.70)
+    var offFill: Color = Color.white.opacity(0.10)
+    var knobColor: Color = .white
+
+    func makeBody(configuration: Configuration) -> some View {
+        let isOn = configuration.isOn
+        Button {
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.9)) {
+                configuration.isOn.toggle()
+            }
+        } label: {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isOn ? onTint : offFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(isOn ? Color.clear : offStroke, lineWidth: 1.6)
+                    )
+                    .frame(width: 50, height: 30)
+                Circle()
+                    .fill(knobColor)
+                    .shadow(color: Color.black.opacity(0.25), radius: 1, x: 0, y: 1)
+                    .frame(width: 24, height: 24)
+                    .padding(3)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Toggle"))
+        .accessibilityValue(Text(isOn ? "On" : "Off"))
+    }
+}
+
+private struct ToggleRow: View {
+    let title: String
+    @Binding var isOn: Bool
+    var titleColor: Color = FuturistTheme.textPrimary
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title).foregroundStyle(titleColor)
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(NeonOutlineToggleStyle())
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(title))
+        .accessibilityValue(isOn ? Text("On") : Text("Off"))
+    }
+}
+
+private struct ValueChip: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(FuturistTheme.textPrimary)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color.white.opacity(0.10), in: Capsule())
+            .overlay(Capsule().stroke(FuturistTheme.cardStroke, lineWidth: 1))
+    }
+}
+
+// MARK: - Picker chrome for inline Date/Time (dark + neon)
+private struct PickerChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .environment(\.colorScheme, .dark)
+            .tint(FuturistTheme.neonAqua)
+    }
+}
+private extension View { func pickerChrome() -> some View { modifier(PickerChrome()) } }
+
+private struct InlineGraphicalCalendar: View {
+    let label: String
+    @Binding var date: Date
+    let range: PartialRangeFrom<Date>
+    var body: some View {
+        DatePicker(label, selection: $date, in: range, displayedComponents: .date)
+            .datePickerStyle(.graphical)
+            .labelsHidden()
+            .pickerChrome()
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(FuturistTheme.cardStroke, lineWidth: 1))
+            .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+}
+
+private struct InlineWheelTimePicker: View {
+    let label: String
+    @Binding var time: Date
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DatePicker(label, selection: $time, displayedComponents: .hourAndMinute)
+                .datePickerStyle(.wheel)
+                .labelsHidden()
+                .pickerChrome()
+                .frame(maxWidth: .infinity)
+                .frame(height: 168)
+                .clipped()
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+        }
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(FuturistTheme.cardStroke, lineWidth: 1))
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+}
+
+// MARK: - Edit Task
+struct EditTaskAssignmentView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let original: TaskAssignment
+
+    // Convenience so existing call sites using `assignment:` keep working
+    init(assignment: TaskAssignment) { self.original = assignment
+        _helperText = State(initialValue: assignment.helper ?? "")
+        _rewardPoints = State(initialValue: max(0, assignment.rewardPoints))
+        _subtractIfNotCompleted = State(initialValue: assignment.subtractIfNotCompleted)
+        _isActive = State(initialValue: assignment.isActive)
+
+        _startDate = State(initialValue: assignment.startDate)
+        _finishDateEnabled = State(initialValue: assignment.endDate != nil)
+        _finishDate = State(initialValue: assignment.endDate ?? assignment.startDate)
+
+        _occurrence = State(initialValue: assignment.occurrence)
+        _selectedWeekdays = State(initialValue: Set(assignment.weekdays))
+
+        let now = Date()
+        _startTimeEnabled = State(initialValue: assignment.startTime != nil)
+        _startTime = State(initialValue: assignment.startTime ?? now)
+        _finishTimeEnabled = State(initialValue: assignment.finishTime != nil)
+        _finishTime = State(initialValue: assignment.finishTime ?? now)
+
+        _alertMe = State(initialValue: assignment.alertMe) // persisted; no UI
+        _photoEvidence = State(initialValue: assignment.photoEvidenceRequired)
+
+        _startNotifyEnabled = State(initialValue: assignment.startNotifyEnabled)
+        _startNotifyRecipient = State(initialValue: assignment.startNotifyRecipient)
+        _startNotifyOffsetMinutes = State(initialValue: assignment.startNotifyOffsetMinutes ?? 5)
+        _finishNotifyEnabled = State(initialValue: assignment.finishNotifyEnabled)
+        _finishNotifyRecipient = State(initialValue: assignment.finishNotifyRecipient)
+        _finishNotifyOffsetMinutes = State(initialValue: assignment.finishNotifyOffsetMinutes ?? 0)
+    }
+
+    // MARK: - Template & Fields
+    @State private var selectedTemplate: TaskTemplate? = nil
+    @State private var showSelectTask = false
+
+    @State private var helperText: String
+    @State private var rewardPoints: Int
+    @State private var subtractIfNotCompleted: Bool
+    @State private var isActive: Bool
+
+    // Dates / Occurrence
+    @State private var startDate: Date
+    @State private var finishDateEnabled: Bool
+    @State private var finishDate: Date
+    @State private var occurrence: TaskAssignment.Occurrence
+    @State private var selectedWeekdays: Set<Int>
+    private let weekdayLabels = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+
+    // Inline picker toggles
+    @State private var showStartDateInline: Bool = false
+    @State private var showFinishDateInline: Bool = false
+    @State private var showStartTimeInline: Bool = false
+    @State private var showFinishTimeInline: Bool = false
+
+    // Time (no Duration)
+    @State private var startTimeEnabled: Bool
+    @State private var startTime: Date
+    @State private var finishTimeEnabled: Bool
+    @State private var finishTime: Date
+
+    // Options (alert persisted; no UI)
+    @State private var alertMe: Bool
+    @State private var photoEvidence: Bool
+
+    // Toast / hint
+    @State private var localToastMessage: String? = nil
+    @State private var lastClampToastAt: Date = .distantPast
+    @State private var skipTodayInfo: String? = nil
+
+    // 🔹 Delete confirmation flag
+    @State private var showDeleteConfirm: Bool = false
+
+    // Notify Me (persisted)
+    @State private var startNotifyEnabled: Bool
+    @State private var startNotifyRecipient: NotifyRecipient
+    @State private var startNotifyOffsetMinutes: Int
+    @State private var finishNotifyEnabled: Bool
+    @State private var finishNotifyRecipient: NotifyRecipient
+    @State private var finishNotifyOffsetMinutes: Int
+
+    // Collapsible helper
+    @State private var showHelperEditor: Bool = false
+
+    // 🔹 UISegmentedControl appearance backups (for parity with Assign Task)
+    @State private var prevSegTitleAttrsNormal: [NSAttributedString.Key: Any]?
+    @State private var prevSegTitleAttrsSelected: [NSAttributedString.Key: Any]?
+    @State private var prevSelectedTintColor: UIColor?
+
+    // MARK: - Helpers (dates, toasts)
+    private var isoCalendar: Calendar {
+        var cal = Calendar(identifier: .iso8601); cal.timeZone = .current; return cal
+    }
+    private func dayOnly(_ d: Date) -> Date { isoCalendar.startOfDay(for: d) }
+    private var startDatePickerLowerBound: Date {
+        min(dayOnly(Date()), dayOnly(original.startDate))
+    }
+    private func showLocalToast(_ message: String) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) { localToastMessage = message }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeOut(duration: 0.2)) { localToastMessage = nil }
+        }
+    }
+    private func clampToast(_ message: String) {
+        let now = Date()
+        guard now.timeIntervalSince(lastClampToastAt) > 1.0 else { return }
+        lastClampToastAt = now
+        showLocalToast(message)
+    }
+
+    private func weekdayIndexMondayFirst(for date: Date) -> Int {
+        let wd = isoCalendar.component(.weekday, from: date) // 1=Sun ... 7=Sat
+        switch wd { case 2: return 0; case 3: return 1; case 4: return 2; case 5: return 3; case 6: return 4; case 7: return 5; default: return 6 }
+    }
+    private func isTodaySelectedWeekday() -> Bool {
+        selectedWeekdays.contains(weekdayIndexMondayFirst(for: startDate))
+    }
+    private func clampFinishNotBeforeStart() {
+        guard startTimeEnabled, finishTimeEnabled else { return }
+        if finishTime < startTime { finishTime = startTime }
+    }
+
+    // Option‑B: Specified Days + past start time today → bump Start Date +1 day with hint
+    private func handlePastTimeOnTodayIfNeeded() {
+        guard occurrence == .specifiedDays else { skipTodayInfo = nil; return }
+        guard dayOnly(startDate) == dayOnly(Date()) else { skipTodayInfo = nil; return }
+        guard isTodaySelectedWeekday() else { skipTodayInfo = nil; return }
+        guard startTimeEnabled else { skipTodayInfo = nil; return }
+
+        let nowComps = isoCalendar.dateComponents([.hour, .minute], from: Date())
+        let nowKey = (nowComps.hour ?? 0) * 60 + (nowComps.minute ?? 0)
+        let stComps = isoCalendar.dateComponents([.hour, .minute], from: startTime)
+        let startKey = (stComps.hour ?? 0) * 60 + (stComps.minute ?? 0)
+        guard startKey < nowKey else { skipTodayInfo = nil; return }
+
+        if let next = isoCalendar.date(byAdding: .day, value: 1, to: startDate) {
+            startDate = dayOnly(next)
+            if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
+                finishDate = startDate
+            }
+            let df = DateFormatter(); df.calendar = isoCalendar; df.locale = .current
+            df.dateStyle = .medium; df.timeStyle = .none
+            skipTodayInfo = "Start time has already passed today. First occurrence will be \(df.string(from: startDate))."
+        }
+    }
+
+    private func enforceNoPastScheduling() {
+        let now = Date()
+        let today = dayOnly(Date())
+
+        if dayOnly(startDate) < today {
+            startDate = today
+            if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
+                finishDate = startDate
+            }
+            clampToast("Start date adjusted to today.")
+        }
+
+        if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
+            finishDate = startDate
+            clampToast("Finish date adjusted to match start date.")
+        }
+
+        let isToday = (dayOnly(startDate) == today)
+        if isToday && occurrence != .specifiedDays {
+            let nowComps = isoCalendar.dateComponents([.hour, .minute], from: now)
+            let nowKey = (nowComps.hour ?? 0) * 60 + (nowComps.minute ?? 0)
+            let sKey = (isoCalendar.component(.hour, from: startTime) * 60) + isoCalendar.component(.minute, from: startTime)
+            let fKey = (isoCalendar.component(.hour, from: finishTime) * 60) + isoCalendar.component(.minute, from: finishTime)
+            if startTimeEnabled && sKey < nowKey {
+                startTime = now; clampToast("Start time adjusted to now.")
+            }
+            if finishTimeEnabled && fKey < nowKey {
+                finishTime = now; clampToast("Finish time adjusted to now.")
+            }
+        }
+
+        clampFinishNotBeforeStart()
+        handlePastTimeOnTodayIfNeeded()
+        reconcileSelectedWeekdaysWithAllowed()
+    }
+
+    // Allowed weekdays for Specified Days within Start..Finish range
+    private var allowedWeekdays: Set<Int> {
+        guard finishDateEnabled else { return Set(0..<7) }
+        let start = dayOnly(startDate)
+        let end = dayOnly(finishDate)
+        if end < start { return [] }
+        if let diff = isoCalendar.dateComponents([.day], from: start, to: end).day, diff >= 6 {
+            return Set(0..<7)
+        }
+        var set = Set<Int>(); var d = start
+        while d <= end {
+            set.insert(weekdayIndexMondayFirst(for: d))
+            guard let next = isoCalendar.date(byAdding: .day, value: 1, to: d) else { break }
+            d = next
+        }
+        return set
+    }
+    private func allowedHintText(for allowed: Set<Int>) -> String {
+        guard finishDateEnabled else { return "Applies on selected weekdays." }
+        if allowed.count == 1 {
+            let df = DateFormatter(); df.calendar = isoCalendar; df.locale = .current
+            df.dateStyle = .medium
+            let only = weekdayLabels[allowed.first!]
+            return "Only \(only) fits \(df.string(from: startDate))"
+        } else {
+            let labels = allowed.sorted().map { weekdayLabels[$0] }.joined(separator: ", ")
+            return "Allowed days in range: \(labels)"
+        }
+    }
+    private func reconcileSelectedWeekdaysWithAllowed() {
+        guard occurrence == .specifiedDays else { return }
+        let allowed = allowedWeekdays
+        guard !allowed.isEmpty else { return }
+        let before = selectedWeekdays
+        let after  = before.intersection(allowed)
+        if after != before {
+            selectedWeekdays = after
+            let removed = before.subtracting(after).sorted()
+            if !removed.isEmpty {
+                let removedLabels = removed.map { weekdayLabels[$0] }.joined(separator: ", ")
+                showLocalToast("Removed: \(removedLabels) (not in date range)")
+            }
+        }
+    }
+
+    // MARK: - Formatters
+    private func dateString(_ date: Date) -> String {
+        let df = DateFormatter(); df.calendar = isoCalendar; df.locale = .current
+        df.dateFormat = "EEE, d MMM yyyy"; return df.string(from: date)
+    }
+    private func timeString(_ date: Date) -> String {
+        let df = DateFormatter(); df.calendar = isoCalendar; df.locale = .current
+        df.dateStyle = .none; df.timeStyle = .short; return df.string(from: date)
+    }
+
+    // MARK: - Save
+    private func saveEdits() {
+        enforceNoPastScheduling()
+
+        let taskTitle  = selectedTemplate?.title ?? original.taskTitle
+        let taskIcon   = selectedTemplate?.iconSymbol ?? original.taskIcon
+        let templateId = selectedTemplate?.id ?? original.templateId
+
+        let helper = helperText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let helperOrNil = helper.isEmpty ? nil : helper
+
+        let end: Date? = (occurrence == .onceOnly) ? nil : (finishDateEnabled ? finishDate : nil)
+        let startTimeValue: Date?  = startTimeEnabled  ? startTime  : nil
+        let finishTimeValue: Date? = finishTimeEnabled ? finishTime : nil
+
+        // Notify to persisted
+        let persistedStartOffset: Int?  = startNotifyEnabled  ? max(0, startNotifyOffsetMinutes)  : nil
+        let persistedFinishOffset: Int? = finishNotifyEnabled ? max(0, finishNotifyOffsetMinutes) : nil
+
+        var updated = original
+        updated.templateId = templateId
+        updated.taskTitle  = taskTitle
+        updated.taskIcon   = taskIcon
+        updated.rewardPoints = max(0, rewardPoints)
+        updated.helper = helperOrNil
+        updated.subtractIfNotCompleted = subtractIfNotCompleted
+        updated.alertMe = alertMe
+        updated.photoEvidenceRequired = photoEvidence
+        updated.isActive = isActive
+        updated.startDate = startDate
+        updated.endDate   = end
+        updated.occurrence = occurrence
+        updated.weekdays   = Array(selectedWeekdays).sorted()
+        updated.startTime  = startTimeValue
+        updated.finishTime = finishTimeValue
+        updated.durationMinutes = nil // Duration removed
+
+        updated.startNotifyEnabled = startNotifyEnabled
+        updated.startNotifyRecipient = startNotifyRecipient
+        updated.startNotifyOffsetMinutes = persistedStartOffset
+        updated.finishNotifyEnabled = finishNotifyEnabled
+        updated.finishNotifyRecipient = finishNotifyRecipient
+        updated.finishNotifyOffsetMinutes = persistedFinishOffset
+        updated.updatedAt = Date()
+
+        _ = appState.updateTaskAssignment(updated)
+
+        if updated.isActive {
+            NotificationManager.shared.scheduleNext(for: updated, audience: currentAudience())
+        } else {
+            Noti

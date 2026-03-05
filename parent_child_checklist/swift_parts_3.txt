@@ -1,0 +1,1795 @@
+eTextAttributes(normalTitleAttrs, for: .normal)
+                UISegmentedControl.appearance().setTitleTextAttributes(selectedTitleAttrs, for: .selected)
+                UISegmentedControl.appearance().selectedSegmentTintColor = .white
+            }
+            .onDisappear {
+                if let prev = prevSegTitleAttrsNormal   { UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .normal) }
+                if let prev = prevSegTitleAttrsSelected { UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .selected) }
+                if let prev = prevSelectedTintColor     { UISegmentedControl.appearance().selectedSegmentTintColor = prev }
+            }
+
+            // Template picker (push)
+            .navigationDestination(isPresented: $showSelectTask) { taskTemplateDestination }
+            // Assign-To picker (sheet)
+            .sheet(isPresented: $showAssignToPicker) {
+                AssignToPickerSheet(
+                    allChildren: appState.children,
+                    preselected: selectedChildIds,
+                    onApply: { newSelection in selectedChildIds = newSelection }
+                )
+                .environmentObject(appState)
+            }
+        }
+    }
+
+    // MARK: - Reward Points helpers
+    @ViewBuilder
+    private func pointsStepperRow() -> some View {
+        HStack(spacing: 12) {
+            Text("💎 Points").foregroundStyle(FuturistTheme.textPrimary)
+            Spacer(minLength: 8)
+
+            Button {
+                rewardPoints = max(0, rewardPoints - 1)
+            } label: {
+                Image(systemName: "minus.circle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.neonAqua)
+                    .shadow(color: FuturistTheme.neonAqua.opacity(0.35), radius: 2)
+            }
+            .buttonStyle(.plain)
+            .disabled(rewardPoints == 0)
+            .opacity(rewardPoints == 0 ? 0.6 : 1.0)
+
+            Text("\(rewardPoints)")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(FuturistTheme.textPrimary)
+                .frame(minWidth: 32, alignment: .center)
+
+            Button { rewardPoints += 1 } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.neonAqua)
+                    .shadow(color: FuturistTheme.neonAqua.opacity(0.35), radius: 2)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutPriority(1)
+    }
+
+    // MARK: - COMPACT weekday chip
+    @ViewBuilder
+    private func weekdayChipCompact(index: Int, label: String, isSelected: Bool, isAllowed: Bool) -> some View {
+        let borderColor: Color = {
+            if !isAllowed { return FuturistTheme.cardStroke }
+            return isSelected ? FuturistTheme.neonAqua : FuturistTheme.chipBorder
+        }()
+        let textColor: Color = {
+            if !isAllowed { return FuturistTheme.chipDisabled }
+            return FuturistTheme.textPrimary
+        }()
+        let fill: Color = isSelected ? FuturistTheme.neonAqua.opacity(0.18) : .clear
+
+        Text(label)
+            .font(.caption2).fontWeight(.semibold)
+            .foregroundStyle(textColor)
+            .frame(minWidth: 34, minHeight: 24)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(fill))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(borderColor, lineWidth: isSelected ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard isAllowed else { return }
+                if isSelected { selectedWeekdays.remove(index) } else { selectedWeekdays.insert(index) }
+            }
+    }
+
+    private func allowedHintText(for allowed: Set<Int>) -> String {
+        guard finishDateEnabled else { return "Applies on selected weekdays." }
+        if allowed.count == 1 {
+            let df = DateFormatter(); df.calendar = isoCalendar; df.locale = .current
+            df.dateStyle = .medium
+            let only = weekdayLabels[allowed.first!]
+            return "Only \(only) fits \(df.string(from: startDate))"
+        } else {
+            let labels = allowed.sorted().map { weekdayLabels[$0] }.joined(separator: ", ")
+            return "Allowed days in range: \(labels)"
+        }
+    }
+
+    // MARK: - Assign To summary
+    private var assignToSummaryText: String {
+        let allIds = Set(appState.children.map(\.id))
+        if selectedChildIds == allIds && !allIds.isEmpty { return "All children" }
+        let names = appState.children
+            .filter { selectedChildIds.contains($0.id) }
+            .map(\.name)
+        if names.isEmpty { return "None" }
+        if names.count <= 2 { return names.joined(separator: ", ") }
+        return "\(names[0]), \(names[1]), +\(names.count - 2) more"
+    }
+
+    // MARK: - Template picker destination
+    private var taskTemplateDestination: some View {
+        SelectTaskTemplateView(
+            selectedTemplateId: selectedTemplate?.id,
+            onPick: { picked in
+                selectedTemplate = picked
+                rewardPoints = max(0, picked.rewardPoints)
+            }
+        )
+        .environmentObject(appState)
+    }
+
+    // MARK: - Save (persists Notify fields and schedules notifications)
+    private func saveAssignment() {
+        enforceNoPastScheduling()
+        guard let tpl = selectedTemplate else { return }
+        guard !selectedChildIds.isEmpty else { return }
+
+        let helper = helperText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let helperOrNil = helper.isEmpty ? nil : helper
+        let startTimeValue: Date? = startTimeEnabled ? startTime : nil
+        let finishTimeValue: Date? = finishTimeEnabled ? finishTime : nil
+
+        var skippedNames: [String] = []
+        var createdCount = 0
+        var createdAssignments: [TaskAssignment] = []
+
+        for cid in selectedChildIds {
+            let proposed = TaskAssignment(
+                childId: cid,
+                templateId: tpl.id,
+                taskTitle: tpl.title,
+                taskIcon: tpl.iconSymbol,
+                rewardPoints: max(0, rewardPoints),
+                helper: helperOrNil,
+                subtractIfNotCompleted: subtractIfNotCompleted,
+                alertMe: false,
+                photoEvidenceRequired: photoEvidence,
+                isActive: isActive,
+                startDate: startDate,
+                endDate: (occurrence == .onceOnly) ? nil : (finishDateEnabled ? finishDate : nil),
+                occurrence: occurrence,
+                weekdays: Array(selectedWeekdays).sorted(),
+                startTime: startTimeValue,
+                finishTime: finishTimeValue,
+                durationMinutes: nil,
+                linkedEventAssignmentId: nil,
+                // Notify
+                startNotifyEnabled: startNotifyEnabled,
+                startNotifyRecipient: startNotifyRecipient,
+                startNotifyOffsetMinutes: startNotifyEnabled ? max(0, startNotifyOffsetMinutes) : nil,
+                finishNotifyEnabled: finishNotifyEnabled,
+                finishNotifyRecipient: finishNotifyRecipient,
+                finishNotifyOffsetMinutes: finishNotifyEnabled ? max(0, finishNotifyOffsetMinutes) : nil,
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+
+            if isExactDuplicateTask(proposed) { skippedNames.append(childName(cid)); continue }
+
+            _ = appState.createTaskAssignment(proposed)
+            createdAssignments.append(proposed)
+            createdCount += 1
+        }
+
+        if createdCount > 0 {
+            let audience = currentAudience()
+            for a in createdAssignments where a.isActive {
+                NotificationManager.shared.scheduleNext(for: a, audience: audience)
+            }
+            if !skippedNames.isEmpty {
+                onShowWeeklyToast?("Already assigned to \(skippedNames.joined(separator: ", "))")
+            }
+            parentSelectedTab = "children"
+            dismiss()
+        } else {
+            if !skippedNames.isEmpty {
+                showLocalToast("Already assigned to \(skippedNames.joined(separator: ", "))")
+            }
+        }
+    }
+
+    private func currentAudience() -> NotificationAudience { .parent }
+}
+
+// MARK: - Assign-To multi-select sheet
+private struct AssignToPickerSheet: View {
+    let allChildren: [ChildProfile]
+    let preselected: Set<UUID>
+    var onApply: (Set<UUID>) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var appState: AppState
+
+    @State private var working: Set<UUID> = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(allChildren) { child in
+                    Button {
+                        if working.contains(child.id) { working.remove(child.id) }
+                        else { working.insert(child.id) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 32)
+                            Text(child.name)
+                            Spacer()
+                            Image(systemName: working.contains(child.id) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(working.contains(child.id) ? Color.accentColor : Color.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .navigationTitle("Choose Children")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .topBarLeading) {
+                    Button("Select All") { working = Set(allChildren.map(\.id)) }
+                    Button("Clear All") { working.removeAll() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        onApply(working)
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear { working = preselected }
+        }
+    }
+}
+
+
+===== ./SharedEventAssignmentRow.swift =====
+
+//
+//  SharedEventAssignmentRow.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+//
+// SharedEventAssignmentRow.swift
+// parent_child_checklist
+//
+// Reusable event row for both parent and child lists.
+// Child screens do NOT attach any swipe actions to this row.
+//
+
+import SwiftUI
+
+struct SharedEventAssignmentRow: View {
+    let event: EventAssignment
+
+    // MARK: - Layout & visual tokens (mirrors SharedTaskAssignmentRow)
+    private let leftColumnWidth: CGFloat = 56   // placeholder "radio" + spacing + emoji; keeps titles aligned
+    private let radioSize: CGFloat = 24
+    private let emojiSize: CGFloat = 22
+    private let spacingAfterRadio: CGFloat = 8
+    private let rowVerticalPadding: CGFloat = 8 // inner content padding (list adds extra padding for divider)
+
+    // Secondary/meta styling tuned for readability on dark cards
+    private let metaColor = Color.white.opacity(0.78)
+
+    @GestureState private var isPressing: Bool = false
+
+    private var dimmed: Bool { !event.isActive }
+
+    private var timeSummary: String? {
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "h:mm a"
+        var parts: [String] = []
+        if let start = event.startTime {
+            parts.append("⏰ \(timeFormatter.string(from: start))")
+        }
+        if let finish = event.finishTime {
+            parts.append("→ \(timeFormatter.string(from: finish))")
+        }
+        if let dur = event.durationMinutes, dur > 0 {
+            let h = dur / 60
+            let m = dur % 60
+            if h > 0 && m > 0 { parts.append("⏳ \(h)h \(m)m") }
+            else if h > 0 { parts.append("⏳ \(h)h") }
+            else { parts.append("⏳ \(m)m") }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    private var locationLine: String? {
+        let t = event.locationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : "📍 \(t)"
+    }
+
+    private var alertLine: String? {
+        guard event.alertMe else { return nil }
+        let mins = event.alertOffsetMinutes ?? 0
+        if mins == 0 { return "🔔 Alert at start time" }
+        return "🔔 Alert \(mins) min before"
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+
+            // LEFT COLUMN (fixed width): radio placeholder + emoji (aligns with task rows)
+            ZStack(alignment: .leading) {
+                HStack(spacing: spacingAfterRadio) {
+                    // Invisible radio placeholder to align emoji with task emoji position
+                    Color.clear
+                        .frame(width: radioSize, height: radioSize)
+                        .accessibilityHidden(true)
+
+                    Text(event.eventIcon)
+                        .font(.system(size: emojiSize))
+                        .frame(width: 30, height: 30)
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(width: leftColumnWidth, alignment: .leading)
+
+            // MIDDLE: title + helper + meta
+            VStack(alignment: .leading, spacing: 6) {
+
+                // Title
+                Text(event.eventTitle)
+                    .font(.headline)
+                    .foregroundStyle(Color(red: 0.92, green: 0.97, blue: 1.00)) // frosted white for strong contrast
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+
+                // Helper (optional)
+                if let helper = event.helper,
+                   !helper.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(helper)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                // Meta: time, location, alert
+                if timeSummary != nil || locationLine != nil || alertLine != nil {
+                    HStack(spacing: 10) {
+                        if let timeSummary {
+                            Text(timeSummary)
+                                .font(.footnote)
+                                .foregroundStyle(metaColor)
+                        }
+                        if let locationLine {
+                            Text(locationLine)
+                                .font(.footnote)
+                                .foregroundStyle(metaColor)
+                        }
+                        if let alertLine {
+                            Text(alertLine)
+                                .font(.footnote)
+                                .foregroundStyle(metaColor)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, rowVerticalPadding)
+        // Subtle press feedback for tactile polish
+        .scaleEffect(isPressing ? 0.99 : 1.0)
+        .animation(.spring(response: 0.22, dampingFraction: 0.95), value: isPressing)
+        .gesture(
+            LongPressGesture(minimumDuration: 0.01)
+                .updating($isPressing) { value, state, _ in
+                    state = value
+                }
+        )
+        .opacity(dimmed ? 0.60 : 1.0)
+        .contentShape(Rectangle())
+    }
+}
+
+
+===== ./SharedTaskAssignmentRow.swift =====
+
+//
+// SharedTaskAssignmentRow.swift
+// parent_child_checklist
+//
+// Reusable task row for both parent and child lists.
+// Child screens do NOT attach any swipe actions to this row.
+//
+
+import SwiftUI
+
+struct SharedTaskAssignmentRow: View {
+    let assignment: TaskAssignment
+    let selectedDate: Date
+    let isCompleted: Bool
+    let onToggleComplete: () -> Void
+
+    /// Optional: completion (for the *selected day*) if it exists.
+    /// When present and `hasPhotoEvidence == true`, we show a small "View" button
+    /// alongside the camera icon on the time row.
+    var completionForSelectedDay: TaskCompletionRecord? = nil
+
+    /// Optional: handler invoked when the user taps "View" (photo evidence).
+    var onViewPhoto: (() -> Void)? = nil
+
+    /// When false, the checkmark button is disabled (read-only view).
+    var isInteractive: Bool = true
+
+    // MARK: - Layout & visual tokens
+    private let leftColumnWidth: CGFloat = 56      // radio + spacing + emoji; keeps titles aligned
+    private let radioSize: CGFloat = 24
+    private let emojiSize: CGFloat = 22
+    private let spacingAfterRadio: CGFloat = 8
+    private let rowVerticalPadding: CGFloat = 8    // inner content padding (list adds extra padding for divider)
+
+    // Secondary/meta styling tuned for readability on dark cards
+    private let metaColor = Color.white.opacity(0.78)
+    private let gemColor = Color.accentColor.opacity(0.96) // clear but not louder than the title
+
+    // MARK: - Accents
+    private let magenta = Color(red: 1.0, green: 0.0, blue: 1.0) // used for the ring when NOT selected
+    private let selectedGreen = Color.green                       // used when selected
+
+    // Subtle press feedback (row-level)
+    @GestureState private var isPressing: Bool = false
+
+    private var dimmed: Bool { !assignment.isActive }
+
+    // MARK: - Time summary (unchanged logic)
+    private var timeSummary: String? {
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "h:mm a"
+
+        var parts: [String] = []
+        if let start = assignment.startTime {
+            parts.append("⏰ \(timeFormatter.string(from: start))")
+        }
+        if let finish = assignment.finishTime {
+            parts.append("→ \(timeFormatter.string(from: finish))")
+        }
+        if let dur = assignment.durationMinutes, dur > 0 {
+            let h = dur / 60
+            let m = dur % 60
+            if h > 0 && m > 0 { parts.append("⏳ \(h)h \(m)m") }
+            else if h > 0 { parts.append("⏳ \(h)h") }
+            else { parts.append("⏳ \(m)m") }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    private var hasPhotoForThisDay: Bool {
+        (completionForSelectedDay?.hasPhotoEvidence ?? false)
+    }
+
+    var body: some View {
+        // Extra breathing room between left column and title
+        HStack(alignment: .top, spacing: 16) {
+
+            // LEFT COLUMN (fixed width): radio + emoji
+            ZStack(alignment: .leading) {
+                HStack(spacing: spacingAfterRadio) {
+                    radioButton
+                        .onTapGesture {
+                            guard isInteractive else { return }
+                            onToggleComplete()
+                        }
+                        .padding(.top, 2) // slight optical nudge to center with emoji
+
+                    Text(assignment.taskIcon)
+                        .font(.system(size: emojiSize))
+                        .frame(width: 30, height: 30)
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(width: leftColumnWidth, alignment: .leading)
+            .padding(.trailing, 4) // extra breathing room before the title
+
+            // MIDDLE: title + helper + meta
+            VStack(alignment: .leading, spacing: 6) {
+
+                // Title row
+                HStack(spacing: 10) {
+                    Text(assignment.taskTitle)
+                        .font(.headline)
+                        .foregroundStyle(Color(red: 0.92, green: 0.97, blue: 1.00)) // frosted white for strong contrast
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+
+                    Spacer(minLength: 8)
+
+                    if assignment.rewardPoints > 0 {
+                        HStack(spacing: 4) {
+                            Text("💎")
+                                .font(.subheadline)
+                            Text("\(assignment.rewardPoints)")
+                                .font(.subheadline).fontWeight(.semibold)
+                        }
+                        .foregroundStyle(gemColor)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(assignment.rewardPoints) gems")
+                    }
+                }
+
+                // Helper (optional)
+                if let helper = assignment.helper,
+                   !helper.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(helper)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                // Time row / camera / "View"
+                if assignment.photoEvidenceRequired || timeSummary != nil || hasPhotoForThisDay {
+                    HStack(spacing: 10) {
+
+                        if let timeSummary {
+                            Text(timeSummary)
+                                .font(.footnote)
+                                .foregroundStyle(metaColor)
+                        }
+
+                        if assignment.photoEvidenceRequired {
+                            Image(systemName: "camera.fill")
+                                .font(.footnote)
+                                .foregroundStyle(metaColor)
+                                .accessibilityLabel("Photo required")
+                        }
+
+                        if hasPhotoForThisDay {
+                            Button {
+                                onViewPhoto?()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "photo")
+                                    Text("View")
+                                }
+                                .font(.footnote).fontWeight(.semibold)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.accentColor)
+                            .accessibilityLabel("View photo evidence")
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, rowVerticalPadding)
+        // Subtle press feedback
+        .scaleEffect(isPressing ? 0.99 : 1.0)
+        .animation(.spring(response: 0.22, dampingFraction: 0.95), value: isPressing)
+        .gesture(
+            LongPressGesture(minimumDuration: 0.01)
+                .updating($isPressing) { value, state, _ in
+                    state = value
+                }
+        )
+        .opacity(dimmed ? 0.55 : (isInteractive ? 1.0 : 0.80))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+    }
+
+    // MARK: - Radio glyph (magenta when not selected; green + white tick when selected)
+    private var radioButton: some View {
+        // Colors depend on state
+        let ringColor = isCompleted ? selectedGreen : magenta
+        // Keep the fill subtle; switch to green when selected so the control reads "on"
+        let fillColor: Color = isCompleted ? selectedGreen.opacity(0.25) : .clear
+
+        return Circle()
+            .strokeBorder(ringColor, lineWidth: 2)
+            .background(Circle().fill(fillColor))
+            .frame(width: radioSize, height: radioSize)
+            .overlay {
+                if isCompleted {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)        // white tick (as requested)
+                }
+            }
+            .accessibilityLabel(isCompleted ? "Completed" : "Not completed")
+            .accessibilityAddTraits(.isButton)
+    }
+}
+
+
+===== ./SettingsView.swift =====
+
+//
+// SettingsView.swift
+// parent_child_checklist
+//
+
+import SwiftUI
+import CloudKit
+
+struct SettingsView: View {
+    @EnvironmentObject private var appState: AppState
+
+    // Invite Partner presentation state
+    @State private var isPresentingShareSheet = false
+    @State private var sharingController: UICloudSharingController?
+    @State private var isPreparingShare = false
+    @State private var shareErrorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // MARK: - Family
+                Section("Family") {
+                    Button {
+                        Task { await invitePartnerTapped() }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "person.2.wave.2.fill")
+                                .font(.headline)
+                                .foregroundStyle(.tint)
+                            Text("Invite Partner")
+                            Spacer()
+                            if isPreparingShare {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .disabled(inviteDisabled)
+                    .accessibilityHint(inviteDisabled
+                        ? "Cloud data not ready yet."
+                        : "Share your family to invite another parent.")
+                    if let msg = inviteDisabledReason {
+                        Text(msg)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                // MARK: - App (placeholders)
+                Section("App") {
+                    HStack {
+                        Text("Notifications (coming soon)")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+
+                    HStack {
+                        Text("Appearance (coming soon)")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+
+                // MARK: - About
+                Section("About") {
+                    HStack {
+                        Text("Version")
+                        Spacer()
+                        Text("1.0 (1)")
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // Custom principal title (matches your prior design)
+                ToolbarItem(placement: .principal) {
+                    Text("Settings")
+                        .font(.system(size: 32, weight: .bold, design: .default))
+                        .accessibilityAddTraits(.isHeader)
+                }
+            }
+            .sheet(isPresented: $isPresentingShareSheet) {
+                if let sharingController {
+                    ShareSheet(sharingController: sharingController)
+                }
+            }
+            .alert("Sharing Error", isPresented: Binding<Bool>(
+                get: { shareErrorMessage != nil },
+                set: { if !$0 { shareErrorMessage = nil } }
+            ), actions: {
+                Button("OK", role: .cancel) { shareErrorMessage = nil }
+            }, message: {
+                Text(shareErrorMessage ?? "An unknown error occurred.")
+            })
+        }
+    }
+
+    // MARK: - Invite availability
+
+    private var inviteDisabled: Bool {
+        isPreparingShare || appState.familyContext == nil || !cloudKitReady
+    }
+
+    private var inviteDisabledReason: String? {
+        if isPreparingShare { return "Preparing sharing options…" }
+        guard cloudKitReady else { return "iCloud is not ready. Try again in a moment." }
+        if appState.familyContext == nil { return "Family context not loaded yet." }
+        return nil
+    }
+
+    private var cloudKitReady: Bool {
+        // appState publishes these read-only flags already
+        // (true when FamilyDataStore snapshot has been applied)
+        // - cloudKitLoaded == true means we detected remote user data
+        //   but we still allow sharing even if it's false (first run),
+        //   as long as familyContext is available (we own private zone).
+        // For safety, just require that there is a context.
+        appState.familyContext != nil
+    }
+
+    // MARK: - Actions
+
+    private func invitePartnerTapped() async {
+        guard !isPreparingShare else { return }
+        guard let ctx = appState.familyContext else {
+            shareErrorMessage = "Family context not available yet. Please try again shortly."
+            return
+        }
+
+        isPreparingShare = true
+        defer { isPreparingShare = false }
+
+        do {
+            // Choose the correct database the family currently lives in.
+            // FamilyContext already tells us whether it is private or shared. [2](https://ausgrid-my.sharepoint.com/personal/ggauci_ausgrid_com_au/Documents/Microsoft%20Copilot%20Chat%20Files/swift_parts_7.txt)
+            let database: CKDatabase = appState.cloudDatabaseForCurrentFamily() // convenience helper [2](https://ausgrid-my.sharepoint.com/personal/ggauci_ausgrid_com_au/Documents/Microsoft%20Copilot%20Chat%20Files/swift_parts_7.txt)
+
+            // Build a share UI around the FamilyMeta root record using your helper. [3](https://ausgrid-my.sharepoint.com/personal/ggauci_ausgrid_com_au/Documents/Microsoft%20Copilot%20Chat%20Files/swift_parts_8.txt)
+            let controller = try await CloudKitSharingController(
+                container: .default(),
+                database: database,
+                familyMetaRecordID: ctx.familyMetaRecordID
+            ).makeSharingController() // returns UICloudSharingController configured for the FamilyMeta root
+
+            // Present the system share UI
+            sharingController = controller
+            isPresentingShareSheet = true
+        } catch {
+            shareErrorMessage = "Could not prepare sharing: \(error.localizedDescription)"
+        }
+    }
+}
+
+
+===== ./AddChildView.swift =====
+
+//
+// AddChildView.swift
+// parent_child_checklist
+//
+// Swatch-grid colour selection (no hex picker), pinned bottom button
+//
+
+import SwiftUI
+
+struct AddChildView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String = ""
+    @State private var colorHex: String = "#4A7DFF"
+
+    @State private var createdChild: ChildProfile?
+    @State private var validationMessage: String?
+    @FocusState private var nameFieldFocused: Bool
+
+    // Kid-friendly preset palette (fast + consistent)
+    private let swatchHexes: [String] = [
+        "#4A7DFF", "#00A3FF", "#3CCB7F", "#22C55E", "#A3E635", "#FFB020",
+        "#F97316", "#FF4D4D", "#F43F5E", "#FF6FAE", "#8B5CFF", "#2DD4BF",
+        "#0EA5E9", "#64748B", "#111827", "#FFFFFF"
+    ]
+
+    // Layout
+    private let colorGridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 6)
+
+    // MARK: - Derived validation state
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isDuplicateName: Bool {
+        !trimmedName.isEmpty && appState.isNameTaken(trimmedName)
+    }
+
+    private var canCreate: Bool {
+        createdChild == nil && !trimmedName.isEmpty && !isDuplicateName
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+
+                Section("Child") {
+                    TextField("Name", text: $name)
+                        .focused($nameFieldFocused)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled(true)
+                        .disabled(createdChild != nil)
+
+                    if createdChild == nil {
+                        if isDuplicateName {
+                            Text("That name already exists. Please choose a different name.")
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        } else if let validationMessage {
+                            Text(validationMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+
+                // Colour swatch picker (no hex-value dropdown)
+                Section("Colour") {
+                    HStack {
+                        Text("Selected")
+                        Spacer()
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color(hex: colorHex))
+                            .frame(width: 36, height: 18)
+                    }
+
+                    Text("Tap a colour")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    LazyVGrid(columns: colorGridColumns, spacing: 10) {
+                        ForEach(swatchHexes, id: \.self) { hex in
+                            Button {
+                                colorHex = hex
+                            } label: {
+                                Circle()
+                                    .fill(Color(hex: hex))
+                                    .frame(width: 30, height: 30)
+                                    .overlay(
+                                        Circle().strokeBorder(
+                                            colorHex == hex ? Color.primary : Color.secondary.opacity(0.25),
+                                            lineWidth: colorHex == hex ? 3 : 1
+                                        )
+                                    )
+                                    .shadow(color: .black.opacity(hex == "#FFFFFF" ? 0.10 : 0.0), radius: 2)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(createdChild != nil)
+                            .accessibilityLabel("Colour swatch \(hex)")
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                // Avatar status is child-controlled
+                Section("Avatar") {
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text("Not chosen yet")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("Your child will choose their avatar on their device. It will appear here automatically once selected.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let createdChild {
+                    Section("Created") {
+                        HStack {
+                            Text("Name")
+                            Spacer()
+                            Text(createdChild.name)
+                                .fontWeight(.semibold)
+                        }
+
+                        HStack {
+                            Text("Colour")
+                            Spacer()
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(hex: createdChild.colorHex))
+                                .frame(width: 36, height: 18)
+                        }
+
+                        HStack {
+                            Text("Avatar")
+                            Spacer()
+                            Text("Not chosen yet")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text("On the child’s phone: choose “I’m a Child”, select their name, then choose an avatar.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Add Child")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    nameFieldFocused = true
+                }
+            }
+            .onChange(of: name) { _, _ in
+                validationMessage = nil
+            }
+            // pinned bottom button (no scrolling needed)
+            .safeAreaInset(edge: .bottom) {
+                bottomActionBar
+            }
+        }
+    }
+
+    // MARK: - Pinned Action Bar
+    private var bottomActionBar: some View {
+        VStack(spacing: 10) {
+            if createdChild == nil, let validationMessage {
+                Text(validationMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Button {
+                if createdChild == nil {
+                    create()
+                } else {
+                    dismiss()
+                }
+            } label: {
+                Text(createdChild == nil ? "Create Child" : "Done")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(createdChild == nil ? !canCreate : false)
+        }
+        .padding(.horizontal)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
+        .background(.ultraThinMaterial)
+        .overlay(Divider(), alignment: .top)
+    }
+
+    // MARK: - Create
+    private func create() {
+        validationMessage = nil
+
+        guard !trimmedName.isEmpty else {
+            validationMessage = "Please enter a name."
+            return
+        }
+        guard !isDuplicateName else {
+            validationMessage = "That name already exists. Please choose a different name."
+            return
+        }
+
+        if let child = appState.createChild(name: trimmedName, colorHex: colorHex) {
+            createdChild = child
+            nameFieldFocused = false
+        } else {
+            validationMessage = "Couldn’t create child. Please check the details and try again."
+        }
+    }
+}
+
+
+===== ./DeepAquaElectricBlueBackground.swift =====
+
+//
+//  DeepAquaElectricBlueBackground.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 26/2/2026.
+//
+
+
+import SwiftUI
+
+struct DeepAquaElectricBlueBackground: View {
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(colors: [
+                Color(red: 0.00, green: 0.55, blue: 0.75),   // deep aqua
+                Color(red: 0.00, green: 0.70, blue: 1.00),   // vivid aqua-blue
+                Color(red: 0.00, green: 0.40, blue: 1.00)    // electric blue
+            ]),
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+    }
+}
+
+
+===== ./EditEventAssignmentView.swift =====
+
+import SwiftUI
+
+struct EditEventAssignmentView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let original: EventAssignment
+
+    // Event template selection
+    @State private var selectedTemplate: EventTemplate? = nil
+    @State private var showSelectEvent = false
+
+    // Fields
+    @State private var helperText: String
+    @State private var isActive: Bool
+
+    // Location (optional)
+    @State private var selectedLocationId: UUID?
+    @State private var selectedLocationNameSnapshot: String
+    @State private var showLocationPicker = false
+
+    // Dates
+    @State private var startDate: Date
+    @State private var finishDateEnabled: Bool
+    @State private var finishDate: Date
+
+    // Occurrence
+    @State private var occurrence: EventAssignment.Occurrence
+    @State private var selectedWeekdays: Set<Int>
+    private let weekdayLabels = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+
+    // Times
+    @State private var startTimeEnabled: Bool
+    @State private var startTime: Date
+    @State private var finishTimeEnabled: Bool
+    @State private var finishTime: Date
+
+    // Duration
+    @State private var durationEnabled: Bool
+    @State private var durationHours: Int
+    @State private var durationMinutes: Int
+
+    // Legacy single alert fields (kept; not shown in UI here)
+    @State private var alertMe: Bool
+    @State private var alertOffsetMinutes: Int
+
+    // Delete + toast
+    @State private var showDeleteConfirm = false
+    @State private var localToastMessage: String? = nil
+
+    // NEW: Notify Me (persisted)
+    @State private var startNotifyEnabled: Bool
+    @State private var startNotifyRecipient: NotifyRecipient
+    @State private var startNotifyOffsetMinutes: Int      // UI uses Int; map to Int? on save
+
+    @State private var finishNotifyEnabled: Bool
+    @State private var finishNotifyRecipient: NotifyRecipient
+    @State private var finishNotifyOffsetMinutes: Int
+
+    private let notifyOffsetOptions: [(label: String, minutes: Int)] = [
+        ("At time", 0), ("5 min before", 5), ("10 min before", 10),
+        ("15 min before", 15), ("30 min before", 30),
+        ("1 hour before", 60), ("2 hours before", 120)
+    ]
+
+    // ✅ NEW: inline hint when we accept a past time today and skip to tomorrow
+    @State private var skipTodayInfo: String? = nil
+
+    // MARK: - Init
+    init(assignment: EventAssignment) {
+        self.original = assignment
+
+        _helperText = State(initialValue: assignment.helper ?? "")
+        _isActive = State(initialValue: assignment.isActive)
+
+        _selectedLocationId = State(initialValue: assignment.locationId)
+        _selectedLocationNameSnapshot = State(initialValue: assignment.locationNameSnapshot)
+
+        _startDate = State(initialValue: assignment.startDate)
+        _finishDateEnabled = State(initialValue: assignment.endDate != nil)
+        _finishDate = State(initialValue: assignment.endDate ?? assignment.startDate)
+
+        _occurrence = State(initialValue: assignment.occurrence)
+        _selectedWeekdays = State(initialValue: Set(assignment.weekdays))
+
+        let now = Date()
+        _startTimeEnabled = State(initialValue: assignment.startTime != nil)
+        _startTime = State(initialValue: assignment.startTime ?? now)
+        _finishTimeEnabled = State(initialValue: assignment.finishTime != nil)
+        _finishTime = State(initialValue: assignment.finishTime ?? now)
+
+        let dur = assignment.durationMinutes ?? 0
+        _durationEnabled = State(initialValue: assignment.durationMinutes != nil)
+        _durationHours = State(initialValue: dur / 60)
+        _durationMinutes = State(initialValue: dur % 60)
+
+        _alertMe = State(initialValue: assignment.alertMe)
+        _alertOffsetMinutes = State(initialValue: assignment.alertOffsetMinutes ?? 10)
+
+        // Prefill Notify UI with existing values (defaults if nil)
+        _startNotifyEnabled = State(initialValue: assignment.startNotifyEnabled)
+        _startNotifyRecipient = State(initialValue: assignment.startNotifyRecipient)
+        _startNotifyOffsetMinutes = State(initialValue: assignment.startNotifyOffsetMinutes ?? 5)
+
+        _finishNotifyEnabled = State(initialValue: assignment.finishNotifyEnabled)
+        _finishNotifyRecipient = State(initialValue: assignment.finishNotifyRecipient)
+        _finishNotifyOffsetMinutes = State(initialValue: assignment.finishNotifyOffsetMinutes ?? 0)
+    }
+
+    // MARK: - Helpers
+    private var isoCalendar: Calendar {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = .current
+        return cal
+    }
+    private func dayOnly(_ date: Date) -> Date { isoCalendar.startOfDay(for: date) }
+
+    private var startDatePickerLowerBound: Date {
+        // allow past selection if the original was in the past
+        min(dayOnly(Date()), dayOnly(original.startDate))
+    }
+
+    // Monday-first weekday index helper: 0=Mon ... 6=Sun
+    private func weekdayIndexMondayFirst(for date: Date) -> Int {
+        switch isoCalendar.component(.weekday, from: date) {
+        case 2: return 0 // Mon
+        case 3: return 1 // Tue
+        case 4: return 2 // Wed
+        case 5: return 3 // Thu
+        case 6: return 4 // Fri
+        case 7: return 5 // Sat
+        default: return 6 // Sun
+        }
+    }
+    /// Whether today’s weekday (based on current startDate) is selected
+    private func isTodaySelectedWeekday() -> Bool {
+        let w = weekdayIndexMondayFirst(for: startDate)
+        return selectedWeekdays.contains(w)
+    }
+
+    private func showToast(_ message: String) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+            localToastMessage = message
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                localToastMessage = nil
+            }
+        }
+    }
+
+    /// Keep finish time >= start time whenever both are enabled.
+    private func clampFinishNotBeforeStart() {
+        guard startTimeEnabled, finishTimeEnabled else { return }
+        if finishTime < startTime {
+            finishTime = startTime
+        }
+    }
+
+    /// Keep Finish Time in sync with Start Time + Duration (UI-only).
+    private func syncFinishTimeFromDuration() {
+        guard startTimeEnabled else { return }
+        if !finishTimeEnabled { finishTimeEnabled = true }
+        let totalMinutes = max(0, durationHours * 60 + durationMinutes)
+        finishTime = Calendar.current.date(byAdding: .minute, value: totalMinutes, to: startTime) ?? startTime
+        clampFinishNotBeforeStart()
+    }
+
+    private func offsetDescription(start: Bool, minutes: Int) -> String {
+        if minutes == 0 { return start ? "at the start time" : "at the finish time" }
+        if minutes % 60 == 0 {
+            let hrs = minutes / 60
+            return start
+                ? "\(hrs) hour\(hrs == 1 ? "" : "s") before the start time"
+                : "\(hrs) hour\(hrs == 1 ? "" : "s") before the finish time"
+        }
+        return start ? "\(minutes) min before the start time" : "\(minutes) min before the finish time"
+    }
+
+    // ✅ Option B handler (Edit Event):
+    // Accept past Start Time on today's date for Specified Days, then skip today by advancing startDate to tomorrow and show an inline hint.
+    private func handlePastTimeOnTodayIfNeeded() {
+        // Only applies to Specified Days
+        guard occurrence == .specifiedDays else { skipTodayInfo = nil; return }
+
+        // Start Date must be today
+        let today = dayOnly(Date())
+        guard dayOnly(startDate) == today else { skipTodayInfo = nil; return }
+
+        // Only if today's weekday is selected
+        guard isTodaySelectedWeekday() else { skipTodayInfo = nil; return }
+
+        // Start time must be enabled and before "now"
+        guard startTimeEnabled else { skipTodayInfo = nil; return }
+        let nowComps = isoCalendar.dateComponents([.hour, .minute], from: Date())
+        let nowKey = (nowComps.hour ?? 0) * 60 + (nowComps.minute ?? 0)
+        let stComps = isoCalendar.dateComponents([.hour, .minute], from: startTime)
+        let startKey = (stComps.hour ?? 0) * 60 + (stComps.minute ?? 0)
+        guard startKey < nowKey else { skipTodayInfo = nil; return }
+
+        // ✅ Accept the past time, but skip "today" by advancing Start Date by 1 day.
+        if let next = isoCalendar.date(byAdding: .day, value: 1, to: startDate) {
+            startDate = dayOnly(next)
+            if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
+                finishDate = startDate
+            }
+            let df = DateFormatter()
+            df.calendar = isoCalendar
+            df.locale = .current
+            df.dateStyle = .medium
+            df.timeStyle = .none
+            skipTodayInfo = "Start time has already passed today. First occurrence will be \(df.string(from: startDate))."
+        }
+    }
+
+    // MARK: - Sections
+
+    private var eventSection: some View {
+        Section("Event") {
+            Button { showSelectEvent = true } label: {
+                HStack(spacing: 12) {
+                    let icon = selectedTemplate?.iconSymbol ?? original.eventIcon
+                    let title = selectedTemplate?.title ?? original.eventTitle
+                    TaskEmojiIconView(icon: icon, size: 22)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title).font(.headline)
+                        Text("Tap to change").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            TextField("Helper (optional)", text: $helperText, axis: .vertical)
+                .lineLimit(3, reservesSpace: true)
+            Toggle("Active", isOn: $isActive)
+        }
+    }
+
+    private var locationSection: some View {
+        Section("Location (Optional)") {
+            Button { showLocationPicker = true } label: {
+                HStack {
+                    Text("Selected")
+                    Spacer()
+                    Text(selectedLocationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "None" : selectedLocationNameSnapshot)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var datesSection: some View {
+        Section("Dates") {
+            DatePicker(
+                "Start Date",
+                selection: $startDate,
+                in: startDatePickerLowerBound...,
+                displayedComponents: .date
+            )
+
+            if occurrence == .onceOnly {
+                HStack {
+                    Text("Finish Date")
+                    Spacer()
+                    Text("Not applicable").foregroundStyle(.secondary)
+                }
+            } else {
+                Toggle("Finish Date", isOn: $finishDateEnabled)
+                if finishDateEnabled {
+                    DatePicker(
+                        "Finish Date",
+                        selection: $finishDate,
+                        in: startDate...,
+                        displayedComponents: .date
+                    )
+                }
+            }
+        }
+    }
+
+    private var occurrenceSection: some View {
+        Section("Occurrence") {
+            Picker("Occurrence", selection: $occurrence) {
+                ForEach(EventAssignment.Occurrence.allCases) { opt in
+                    Text(opt.displayName).tag(opt)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if occurrence == .specifiedDays {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Specified Days").font(.footnote).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        ForEach(0..<7, id: \.self) { idx in
+                            let isSelected = selectedWeekdays.contains(idx)
+                            Button {
+                                if isSelected { selectedWeekdays.remove(idx) }
+                                else { selectedWeekdays.insert(idx) }
+                            } label: {
+                                Text(weekdayLabels[idx])
+                                    .font(.caption).fontWeight(.semibold)
+                                    .frame(width: 40, height: 32)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
+                                                    lineWidth: isSelected ? 2 : 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .onChange(of: occurrence) { _, newValue in
+            if newValue == .onceOnly { finishDateEnabled = false }
+            // If switching to Specified Days with a past start time today, apply Option B
+            handlePastTimeOnTodayIfNeeded()
+        }
+        .onChange(of: selectedWeekdays) { _, _ in
+            // If user toggles today's weekday, re-check Option B
+            handlePastTimeOnTodayIfNeeded()
+        }
+    }
+
+    private var startNotifyBlock: some View {
+        Group {
+            if startTimeEnabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Notify Me", isOn: $startNotifyEnabled)
+                    if startNotifyEnabled {
+                        Picker("Who", selection: $startNotifyRecipient) {
+                            ForEach(NotifyRecipient.allCases) { Text($0.displayName).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Picker("When", selection: $startNotifyOffsetMinutes) {
+                            ForEach(notifyOffsetOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
+                        }
+
+                        Text("A notification will be sent to the \(startNotifyRecipient == .both ? "parent and child" : (startNotifyRecipient == .parent ? "parent" : "child")) \(offsetDescription(start: true, minutes: startNotifyOffsetMinutes)).")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private var finishNotifyBlock: some View {
+        Group {
+            if finishTimeEnabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Notify Me", isOn: $finishNotifyEnabled)
+                    if finishNotifyEnabled {
+                        Picker("Who", selection: $finishNotifyRecipient) {
+                            ForEach(NotifyRecipient.allCases) { Text($0.displayName).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+
+                        // SAME labels as start for consistency
+                        Picker("When", selection: $finishNotifyOffsetMinutes) {
+                            ForEach(notifyOffsetOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
+                        }
+
+                        Text("A notification will be sent to the \(finishNotifyRecipient == .both ? "parent and child" : (finishNotifyRecipient == .parent ? "parent" : "child")) \(offsetDescription(start: false, minutes: finishNotifyOffsetMinutes)).")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private var timeSection: some View {
+        Section("Time") {
+            Toggle("Start Time", isOn: $startTimeEnabled)
+                .onChange(of: startTimeEnabled) { _, enabled in
+                    if !enabled { startNotifyEnabled = false; skipTodayInfo = nil }
+                    clampFinishNotBeforeStart()
+                    handlePastTimeOnTodayIfNeeded()
+                }
+
+            if startTimeEnabled {
+                DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute)
+                    .onChange(of: startTime) { _, _ in
+                        if durationEnabled { syncFinishTimeFromDuration() }
+                        clampFinishNotBeforeStart()
+                        handlePastTimeOnTodayIfNeeded()
+                    }
+                startNotifyBlock
+
+                // ✅ Inline hint when we skipped today
+                if let msg = skipTodayInfo {
+                    Text(msg)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Toggle("Finish Time", isOn: $finishTimeEnabled)
+                .onChange(of: finishTimeEnabled) { _, enabled in
+                    if !enabled { finishNotifyEnabled = false }
+                    else { clampFinishNotBeforeStart() }
+                }
+
+            if finishTimeEnabled {
+                DatePicker("Finish Time", selection: $finishTime, displayedComponents: .hourAndMinute)
+                    .onChange(of: finishTime) { _, _ in
+                        clampFinishNotBeforeStart()
+                    }
+                finishNotifyBlock
+            }
+
+            Toggle("Duration", isOn: $durationEnabled)
+                .onChange(of: durationEnabled) { _, enabled in
+                    if enabled {
+                        if !startTimeEnabled { startTimeEnabled = true }
+                        syncFinishTimeFromDuration()
+                    }
+                }
+
+            if durationEnabled {
+                Stepper("Hours: \(durationHours)", value: $durationHours, in: 0...23)
+                    .onChange(of: durationHours) { _, _ in if durationEnabled { syncFinishTimeFromDuration() } }
+                Stepper("Minutes: \(durationMinutes)", value: $durationMinutes, in: 0...55, step: 5)
+                    .onChange(of: durationMinutes) { _, _ in if durationEnabled { syncFinishTimeFromDuration() } }
+                Text("If duration is set, Finish Time will be adjusted to Start Time + Duration.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var deleteSection: some View {
+        Section {
+            Button(role: .destructive) { showDeleteConfirm = true } label: {
+                Text("Delete Event Assignment")
+            }
+        }
+    }
+
+    // MARK: - Body
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                Form {
+                    eventSection
+                    locationSection
+                    datesSection
+                    occurrenceSection
+                    timeSection
+                    // ❌ Old Alerts UI removed (notify replaces it)
+                    deleteSection
+                }
+
+                if let msg = localToastMessage {
+                    ToastBannerView(message: msg)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(10)
+                }
+            }
+            .onAppear {
+                clampFinishNotBeforeStart() // safety on load
+                handlePastTimeOnTodayIfNeeded()
+            }
+            .onChange(of: startTime) { _, _ in clampFinishNotBeforeStart() }
+            .onChange(of: finishTime) { _, _ in clampFinishNotBeforeStart() }
+            .onChange(of: startTimeEnabled) { _, _ in clampFinishNotBeforeStart() }
+            .onChange(of: finishTimeEnabled) { _, _ in clampFinishNotBeforeStart() }
+            .navigationTitle("Edit Event")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Save") { saveEdits() } }
+            }
+            .navigationDestination(isPresented: $showSelectEvent) {
+                SelectEventTemplateView(
+                    selectedTemplateId: selectedTemplate?.id ?? original.templateId,
+                    onPick: { picked in selectedTemplate = picked }
+                )
+                .environmentObject(appState)
+            }
+            .sheet(isPresented: $showLocationPicker) {
+                NavigationStack {
+                    SelectLocationView(
+                        selectedLocationId: $selectedLocationId,
+                        selectedLocationNameSnapshot: $selectedLocationNameSnapshot
+                    )
+                    .environmentObject(appState)
+                }
+            }
+            .alert("Delete this event assignment?", isPresented: $showDeleteConfirm) {
+                Button("Delete", role: .destructive) {
+                    // ✅ cancel any pending notifications for this assignment on this device
+                    NotificationManager.shared.cancelAllForEvent(id: original.id)
+                    appState.deleteEventAssignment(id: original.id)
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This will remove the event assignment.")
+            }
+        }
+    }
+
+    // MARK: - Save (persist Notify fields + schedule/cancel notifications)
+    private func saveEdits() {
+        // Final guard: if user set a past time for today right before saving, apply Option B now.
+        handlePastTimeOnTodayIfNeeded()
+
+        let eventTitle  = selectedTemplate?.title ?? original.eventTitle
+        let eventIcon   = selectedTemplate?.iconSymbol ?? original.eventIcon
+        let templateId  = selectedTemplate?.id ?? original.templateId
+
+        let helper = helperText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let helperOrNil = helper.isEmpty ? nil : helper
+
+        let end: Date? = (occurrence == .onceOnly) ? nil : (finishDateEnabled ? finishDate : nil)
+        let weekdays = Array(selectedWeekdays).sorted()
+
+        let startTimeValue: Date?  = startTimeEnabled  ? startTime  : nil
+        let finishTimeValue: Date? = finishTimeEnabled ? finishTime : nil
+        let durationValue: Int? = durationEnabled ? max(0, durationHours * 60 + durationMinutes) : nil
+
+        // Persist notify values (nil offset when disabled)
+        let persistedStartOffset: Int?  = startNotifyEnabled  ? max(0, startNotifyOffsetMinutes)  : nil
+        let persistedFinishOffset: Int? = finishNotifyEnabled ? max(0, finishNotifyOffsetMinutes) : nil
+
+        var updated = original
+        updated.templateId = templateId
+        updated.eventTitle = eventTitle
+        updated.eventIcon  = eventIcon
+        updated.helper = helperOrNil
+        updated.isActive = isActive
+        updated.startDate = startDate
+        updated.endDate   = end
+        updated.occurrence = occurrence
+        updated.weekdays   = weekdays
+        updated.startTime  = startTimeValue
+        updated.finishTime = finishTimeValue
+        updated.durationMinutes = durationValue
+        updated.locationId = selectedLocationId
+        updated.locationNameSnapshot = selectedLocationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Leave legacy single alert as-is (not surfaced in UI here)
+        updated.alertMe = alertMe
+        updated.alertOffsetMinutes = alertMe ? max(0, alertOffsetMinutes) : nil
+
+        // NEW: Notify persistence
+        updated.startNotifyEnabled = startNotifyEnabled
+        updated.startNotifyRecipient = startNotifyRecipient
+        updated.startNotifyOffsetMinutes = persistedStartOffset
+        updated.finishNotifyEnabled = finishNotifyEnabled
+        updated.finishNotifyRecipient = finishNotifyRecipient
+        updated.finishNotifyOffsetMinutes = persistedFinishOffset
+
+        updated.updatedAt = Date()
+
+        _ = appState.updateEventAssignment(updated)
+
+        // ✅ Cancel & schedule the next notification(s) for THIS DEVICE ONLY
+        if updated.isActive {
+            NotificationManager.shared.scheduleNext(for: updated, audience: currentAudience())
+        } else {
+            NotificationManager.shared.cancelAllForEvent(id: updated.id)
+        }
+
+        dismiss()
+    }
+
+    // MARK: - Audience mapping (Parent vs Child device)
+    /// TODO: If you already store a runtime role in AppState, map to `.parent`/`.child` here.
+    private func currentAudience() -> NotificationAudience {
+        // Example (if available): return appState.isChildMode ? .child : .parent
+        return .parent
+    }
+}
+
+
+===== ./ChildAvatarViews.swift =====
+
+//
+// ChildAvatarCircleView.swift
+// parent_child_checklist
+//
+// Circular avatar image with a child-colour ring.
+// Falls back to a neutral placeholder when no avatarId is set.
+//
+
+import SwiftUI
+
+struct ChildAvatarCircleView: View {
+    let colorHex: String
+    let avatarId: String?
+    var size: CGFloat = 40
+    /// Ring thickness (pt)
+    private let ringThickness: CGFloat = 1.5
+
+    private var catalogAvatar: AvatarCatalog.Avatar {
+        AvatarCatalog.avatar(for: avatarId)
+    }
+
+    var body: some View {
+        ZStack {
+            if let avatarId, !avatarId.isEmpty, !catalogAvatar.assetName.isEmpty {
+                // Bundled image → circular center-crop
+                Image(catalogAvatar.assetName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
+            } else {
+                // Placeholder: subtle neutral background + person glyph
+                Circle()
+                    .fill(Color.secondary.opacity(0.12))
+                Image(systemName: "person.fill")
+                    .font(.system(size: size * 0.52, weight: .regular))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: size, height: size)
+        .overlay(
+            Circle()
+                .stroke(Color(hex: colorHex), lineWidth: ringThickness)
+        )
+        .accessibilityLabel(
+            avatarId == nil || avatarId?.isEmpty == true
+            ? "Avatar not chosen yet"
+            : "Avatar \(catalogAvatar.displayName)"
+        )
+    }
+}
+
+
+
+===== ./CustomEmojiLibraryView.swift =====
+
+//
+// CustomEmojiLibraryView.swift
+// parent_child_checklist
+//
+// Created by George Gauci on 10/2/2026.
+//
+
+import SwiftUI
+
+// MARK: - Manage My Emojis (Sheet)
+struct CustomEmojiLibraryView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    /// When an emoji is tapped, return it to Add/Edit screens.
+    let onPick: (String) -> Void
+
+    @State private var inputEmoji: String = ""
+    @State private var message: String? = nil
+
+    // Destructive confirmations
+    @State private var showClearAllConfirm: Bool = false
+    @State private var emojiPendingDelete: String? = nil
+    @State private var singleDeleteUsageMessage: String? = nil
+    @State private var showSingleDeleteConfirm: Bool = false
+
+    private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+
+                // Input + actions
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Paste any emoji")
+                        .font(.headline)
+
+                    TextField("Paste emoji here (e.g. 🪥, 🎻, 👨‍👩‍👧‍👦)", text: $inputEmoji)
+                        .font(.system(size: 24))
+                        .multilineTextAlignment(.center)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                        .padding(.vertical, 12)
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .onChange(of: inputEmoji) { _, _ in
+                            message = nil
+                        }
+
+                    HStack(spacing: 10) {
+                        Button("Add") { addEmoji() }
+                            .buttonStyle(.borderedProminent)
+
+                        Spacer()
+
+                        if !appState.customEmojis.isEmpty {
+                            Button("Clear All", role: .destructive) {
+                                showClearAllConfirm = true
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Clear all saved emojis")
+                        }
+                    }
+
+                    if let message {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+
+                    // Tip + helper link (optional)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Tip: Save emojis you want to reuse across tasks.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        // Subtle helper link for parents to browse emojis
+                        if let url = URL(string: "https://www.emojicopy.com") {
+                            Link("Need emojis? Browse at EmojiCopy.com →", destination: url)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .accessibilityHint("Opens EmojiCopy dot com in Safari")
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 12)
+
+                Divider()
+
+                // Emoji grid (saved)
+                if appState.customEmojis.isEmpty {
+                    Spacer()
+                    Text("No custom emojis yet.\nTap Add after pasting an emoji.")
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: gridColumns, spacing: 10) {
+                            ForEach(appState.customEmojis, id: \.self) { emoji in
+                                Button {
+                                    onPick(emoji)
+                                    dismiss()
+                                } label: {
+                                    Text(emoji)
+                                        .font(.system(size: 24))
+                                        .frame(maxWidth: .infinity, minHeight: 36)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .fill(Color.blue.opacity(0.10))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                

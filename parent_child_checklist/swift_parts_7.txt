@@ -1,0 +1,1887 @@
+                       }
+                                    }
+                                }
+
+                                // Divider
+                                Rectangle().fill(FuturistTheme.divider).frame(height: 1).accessibilityHidden(true)
+
+                                // FINISH TIME
+                                ToggleRow(title: "Finish Time", isOn: $finishTimeEnabled)
+                                    .onChange(of: finishTimeEnabled) { _, enabled in
+                                        if !enabled {
+                                            withAnimation(.easeInOut(duration: 0.18)) { showFinishTimeInline = false }
+                                            finishNotifyEnabled = false
+                                        } else {
+                                            withAnimation(.easeInOut(duration: 0.18)) {
+                                                showStartDateInline = false
+                                                showFinishDateInline = false
+                                                showStartTimeInline = false
+                                            }
+                                        }
+                                        enforceNoPastScheduling()
+                                    }
+
+                                if finishTimeEnabled {
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            showFinishTimeInline.toggle()
+                                            if showFinishTimeInline {
+                                                showStartDateInline = false
+                                                showFinishDateInline = false
+                                                showStartTimeInline = false
+                                            }
+                                        }
+                                    } label: {
+                                        HStack {
+                                            Text("Finish Time").foregroundStyle(FuturistTheme.textPrimary)
+                                            Spacer()
+                                            ValueChip(text: timeString(finishTime))
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    if showFinishTimeInline {
+                                        InlineWheelTimePicker(label: "Finish Time", time: $finishTime)
+                                            .onChange(of: finishTime) { _, _ in enforceNoPastScheduling() }
+                                    }
+
+                                    // Notify (Finish)
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        ToggleRow(title: "Notify Me", isOn: $finishNotifyEnabled)
+                                        if finishNotifyEnabled {
+                                            Picker("Who", selection: $finishNotifyRecipient) {
+                                                ForEach(NotifyRecipient.allCases) { Text($0.displayName).tag($0) }
+                                            }
+                                            .pickerStyle(.segmented)
+
+                                            Picker("When", selection: $finishNotifyOffsetMinutes) {
+                                                ForEach(notifyOffsetOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
+
+                        BrightLineSeparator()
+
+                        Spacer(minLength: 12)
+                    }
+                    .padding(.top, 12)
+                    .padding(.bottom, 24)
+                }
+
+                if let localToastMessage {
+                    ToastBannerView(message: localToastMessage)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(10)
+                }
+            }
+            // Hide system nav bar; we draw our own header
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
+
+            // Custom top bar
+            .safeAreaInset(edge: .top, spacing: 0) {
+                AssignTopBar(
+                    canSave: canSave,
+                    onCancel: {
+                        parentSelectedTab = "children"
+                        dismiss()
+                    },
+                    onSave: {
+                        if canSave { saveAssignment() }
+                    }
+                )
+                .background(Color.clear)
+            }
+
+            .onAppear {
+                enforceNoPastScheduling()
+                handlePastTimeOnTodayIfNeeded()
+            }
+
+            // Destinations / Sheets
+            .navigationDestination(isPresented: $showSelectEvent) {
+                SelectEventTemplateView(
+                    selectedTemplateId: selectedTemplate?.id,
+                    onPick: { picked in selectedTemplate = picked }
+                )
+                .environmentObject(appState)
+            }
+            .sheet(isPresented: $showAssignToPicker) {
+                AssignToPickerSheet(
+                    allChildren: appState.children,
+                    preselected: selectedChildIds,
+                    onApply: { newSelection in selectedChildIds = newSelection }
+                )
+            }
+            .sheet(isPresented: $showLocationPicker) {
+                NavigationStack {
+                    SelectLocationView(
+                        selectedLocationId: $selectedLocationId,
+                        selectedLocationNameSnapshot: $selectedLocationNameSnapshot
+                    )
+                    .environmentObject(appState)
+                }
+            }
+        }
+    }
+
+    // MARK: - Weekday chip (neon)
+    @ViewBuilder
+    private func weekdayChipCompact(index: Int, label: String, isSelected: Bool, isAllowed: Bool) -> some View {
+        let borderColor: Color = {
+            if !isAllowed { return FuturistTheme.cardStroke }
+            return isSelected ? FuturistTheme.neonAqua : FuturistTheme.chipBorder
+        }()
+        let textColor: Color = {
+            if !isAllowed { return FuturistTheme.chipDisabled }
+            return FuturistTheme.textPrimary
+        }()
+        let fill: Color = isSelected ? FuturistTheme.neonAqua.opacity(0.18) : .clear
+
+        Text(label)
+            .font(.caption2).fontWeight(.semibold)
+            .foregroundStyle(textColor)
+            .frame(minWidth: 34, minHeight: 24)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(fill))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(borderColor, lineWidth: isSelected ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard isAllowed else { return }
+                if isSelected { selectedWeekdays.remove(index) } else { selectedWeekdays.insert(index) }
+            }
+    }
+
+    // MARK: - Save (durationMinutes = nil; notify persisted; schedule notifications)
+    private func saveAssignment() {
+        enforceNoPastScheduling()
+
+        guard let tpl = selectedTemplate else { return }
+        guard !selectedChildIds.isEmpty else { return }
+
+        let helper = helperText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let helperOrNil = helper.isEmpty ? nil : helper
+
+        let start = startDate
+        let end: Date? = (occurrence == .onceOnly) ? nil : (finishDateEnabled ? finishDate : nil)
+        let weekdays = Array(selectedWeekdays).sorted()
+
+        let startTimeValue: Date? = startTimeEnabled ? startTime : nil
+        let finishTimeValue: Date? = finishTimeEnabled ? finishTime : nil
+
+        // Duration removed
+        let durationValue: Int? = nil
+
+        // Notify (persist only if enabled)
+        let persistedStartOffset: Int?  = startNotifyEnabled  ? max(0, startNotifyOffsetMinutes)  : nil
+        let persistedFinishOffset: Int? = finishNotifyEnabled ? max(0, finishNotifyOffsetMinutes) : nil
+
+        var skippedNames: [String] = []
+        var createdAssignments: [EventAssignment] = []
+
+        for cid in selectedChildIds {
+            let proposed = EventAssignment(
+                childId: cid,
+                templateId: tpl.id,
+                eventTitle: tpl.title,
+                eventIcon: tpl.iconSymbol,
+                helper: helperOrNil,
+                isActive: isActive,
+                startDate: start,
+                endDate: end,
+                occurrence: occurrence,
+                weekdays: weekdays,
+                startTime: startTimeValue,
+                finishTime: finishTimeValue,
+                durationMinutes: durationValue,
+                locationId: selectedLocationId,
+                locationNameSnapshot: selectedLocationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines),
+                alertMe: false,
+                alertOffsetMinutes: nil,
+                startNotifyEnabled: startNotifyEnabled,
+                startNotifyRecipient: startNotifyRecipient,
+                startNotifyOffsetMinutes: persistedStartOffset,
+                finishNotifyEnabled: finishNotifyEnabled,
+                finishNotifyRecipient: finishNotifyRecipient,
+                finishNotifyOffsetMinutes: persistedFinishOffset,
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+
+            if isExactDuplicateEvent(proposed) {
+                skippedNames.append(childName(cid))
+                continue
+            }
+
+            _ = appState.createEventAssignment(proposed)
+            createdAssignments.append(proposed)
+        }
+
+        if !createdAssignments.isEmpty {
+            let audience = currentAudience()
+            for ev in createdAssignments where ev.isActive {
+                NotificationManager.shared.scheduleNext(for: ev, audience: audience)
+            }
+            if !skippedNames.isEmpty {
+                onShowWeeklyToast?("Already assigned to \(skippedNames.joined(separator: ", "))")
+            }
+            parentSelectedTab = "children"
+            dismiss()
+        } else {
+            if !skippedNames.isEmpty {
+                showLocalToast("Already assigned to \(skippedNames.joined(separator: ", "))")
+            }
+        }
+    }
+
+    private func currentAudience() -> NotificationAudience { .parent }
+}
+
+
+===== ./ToastBannerView.swift =====
+
+//
+//  ToastBannerView.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 8/2/2026.
+//
+import SwiftUI
+
+struct ToastBannerView: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.footnote)
+            .foregroundStyle(.primary)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
+                Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 3)
+            .padding(.horizontal)
+            .padding(.top, 10)
+            .accessibilityLabel(message)
+    }
+}
+
+
+
+===== ./RewardsView.swift =====
+
+//
+//  RewardsView.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+
+import SwiftUI
+
+struct RewardsView: View {
+    var body: some View {
+        NavigationStack {
+            // Intentionally blank for now
+            Color.clear
+                .ignoresSafeArea()
+                .navigationTitle("Rewards")
+                .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+
+
+===== ./parent_child_checklistApp.swift =====
+
+//
+// parent_child_checklistApp.swift
+// parent_child_checklist
+//
+
+import SwiftUI
+
+@main
+struct parent_child_checklistApp: App {
+
+    @StateObject private var appState = AppState()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(appState)
+                .onAppear {
+                    // 1) Request notification permission (one-time is fine)
+                    NotificationManager.shared.requestAuthorizationIfNeeded()
+
+                    // 2) As soon as AppState has finished loading CloudKit snapshot,
+                    //    run a reconciliation pass to schedule the NEXT upcoming
+                    //    notifications for this device (parent OR child).
+                    //
+                    //    We call it twice:
+                    //    - Immediately (in case of local cached JSON)
+                    //    - Again after a small delay to ensure CloudKit
+                    //      pulled any remote changes.
+                    reconcileAllNotifications()
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        reconcileAllNotifications()
+                    }
+                }
+        }
+    }
+
+    // MARK: - Device audience routing
+    private func currentAudience() -> NotificationAudience {
+        // TODO: If you already track role:
+        // return appState.isChildMode ? .child : .parent
+        return .parent
+    }
+
+    // MARK: - Reconciliation helper
+    private func reconcileAllNotifications() {
+        let audience = currentAudience()
+        let mgr = NotificationManager.shared
+
+        mgr.reconcileTasks(appState.taskAssignments, audience: audience)
+        mgr.reconcileEvents(appState.eventAssignments, audience: audience)
+    }
+}
+
+
+===== ./SelectLocationView.swift =====
+
+//
+// SelectLocationView.swift
+// parent_child_checklist
+//
+
+import SwiftUI
+
+struct SelectLocationView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var selectedLocationId: UUID?
+    @Binding var selectedLocationNameSnapshot: String
+
+    @State private var searchText: String = ""
+
+    // Add
+    @State private var showAddPrompt = false
+    @State private var newLocationName: String = ""
+
+    // Rename
+    @State private var renameTarget: LocationItem? = nil
+    @State private var renameText: String = ""
+
+    private var filteredLocations: [LocationItem] {
+        let sorted = appState.locations.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return sorted }
+        return sorted.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    var body: some View {
+        List {
+            Button {
+                selectedLocationId = nil
+                selectedLocationNameSnapshot = ""
+                dismiss()
+            } label: {
+                HStack {
+                    Text("None")
+                    Spacer()
+                    if selectedLocationId == nil && selectedLocationNameSnapshot.trimmed.isEmpty {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(.tint)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+
+            Section("Locations") {
+                if filteredLocations.isEmpty {
+                    Text("No locations yet. Tap + to add one.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(filteredLocations) { loc in
+                        Button {
+                            selectedLocationId = loc.id
+                            selectedLocationNameSnapshot = loc.name
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text(loc.name)
+                                    .font(.headline)
+                                Spacer()
+                                if selectedLocationId == loc.id {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tint)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button {
+                                renameTarget = loc
+                                renameText = loc.name
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            .tint(.blue)
+
+                            Button(role: .destructive) {
+                                appState.deleteLocation(id: loc.id)
+                                if selectedLocationId == loc.id {
+                                    selectedLocationId = nil
+                                    // keep snapshot text as-is (historical)
+                                }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Select Location")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Close") { dismiss() }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    newLocationName = ""
+                    showAddPrompt = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+            }
+        }
+        .alert("Add Location", isPresented: $showAddPrompt) {
+            TextField("Location name", text: $newLocationName)
+            Button("Add") { addLocation() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Enter a new location.")
+        }
+        .alert("Rename Location", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("Location name", text: $renameText)
+            Button("Save") { renameLocation() }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+        } message: {
+            Text("Renaming will update all event assignments using this location.")
+        }
+    }
+
+    private func addLocation() {
+        let t = newLocationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        if let loc = appState.createLocation(name: t) {
+            selectedLocationId = loc.id
+            selectedLocationNameSnapshot = loc.name
+            dismiss()
+        }
+    }
+
+    private func renameLocation() {
+        guard let target = renameTarget else { return }
+        let t = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+
+        let ok = appState.renameLocation(id: target.id, newName: t)
+        if ok, selectedLocationId == target.id {
+            selectedLocationNameSnapshot = t
+        }
+        renameTarget = nil
+    }
+}
+
+
+===== ./AuroraBluePurpleBackground.swift =====
+
+//
+//  AuroraBluePurpleBackground.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 26/2/2026.
+//
+
+
+import SwiftUI
+
+struct AuroraBluePurpleBackground: View {
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(colors: [
+                Color(red: 0.05, green: 0.12, blue: 0.30),   // deep navy
+                Color(red: 0.12, green: 0.36, blue: 0.98),   // electric blue
+                Color(red: 0.42, green: 0.29, blue: 1.00),   // indigo-violet
+                Color(red: 0.62, green: 0.35, blue: 1.00),   // lighter violet
+                Color(red: 0.93, green: 0.97, blue: 1.00)    // soft white highlight
+            ]),
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+    }
+}
+
+
+===== ./Notifications.swift =====
+
+//
+//  Notifications.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 19/2/2026.
+//
+// Notifications.swift
+import Foundation
+
+extension Notification.Name {
+    /// Posted after the child successfully saves a new avatar selection.
+    static let avatarUpdated = Notification.Name("AvatarUpdated")
+}
+
+
+===== ./CurvyAquaBlueBackground.swift =====
+
+//
+//  CurvyAquaBlueBackground.swift
+//  parent_child_checklist
+//
+//  List‑safe animated background (reversing shimmer; no compositing issues)
+//
+
+import SwiftUI
+
+struct CurvyAquaBlueBackground: View {
+    var animate: Bool = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var t: CGFloat = 0   // wave phase
+
+    var body: some View {
+        ZStack {
+            // 1) Deep blue base gradient
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.02, green: 0.08, blue: 0.25), // deep navy
+                    Color(red: 0.00, green: 0.22, blue: 0.50), // sapphire
+                    Color(red: 0.00, green: 0.45, blue: 0.85), // electric blue
+                ]),
+                startPoint: .bottom,
+                endPoint: .top
+            )
+            .ignoresSafeArea()
+
+            // 2) Soft vignette (opacity only; no blendMode)
+            RadialGradient(
+                gradient: Gradient(colors: [
+                    Color.black.opacity(0.22),
+                    .clear
+                ]),
+                center: .bottomLeading,
+                startRadius: 0,
+                endRadius: 460
+            )
+            .ignoresSafeArea()
+
+            // 3) Lower wave (deeper band)
+            WaveBandSafe(
+                yOffset: animate && !reduceMotion ? sin(t * 0.9) * 18 : 0,
+                thickness: 260,
+                colors: [
+                    Color.blue.opacity(0.23),
+                    Color.blue.opacity(0.06),
+                    .clear
+                ],
+                blur: 34,
+                rotation: .degrees(-12)
+            )
+            .offset(y: 180)
+
+            // 4) Upper wave (brighter highlight)
+            WaveBandSafe(
+                yOffset: animate && !reduceMotion ? cos(t * 1.4 + 1.2) * 22 : 0,
+                thickness: 200,
+                colors: [
+                    Color(red: 0.20, green: 0.80, blue: 1.00).opacity(0.42),
+                    Color.blue.opacity(0.16),
+                    .clear
+                ],
+                blur: 26,
+                rotation: .degrees(-10)
+            )
+            .offset(y: 60)
+
+            // 5) Corner glow (top‑right)
+            RadialGradient(
+                gradient: Gradient(colors: [
+                    Color.white.opacity(0.78),
+                    Color.white.opacity(0.0)
+                ]),
+                center: .topTrailing,
+                startRadius: 16,
+                endRadius: 360
+            )
+            .ignoresSafeArea()
+
+            // 6) Reversing shimmer (ease in/out; no snap; list‑safe)
+            if animate && !reduceMotion {
+                ShimmerSweepAutoReverse(duration: 12) // adjust duration for feel (slower/faster)
+                    .allowsHitTesting(false)
+            }
+        }
+        // Always behind content; never intercept gestures
+        .zIndex(-1)
+        .allowsHitTesting(false)
+        .onAppear {
+            guard animate && !reduceMotion else { return }
+
+            // Wave motion (ease at turnarounds for a natural feel)
+            withAnimation(.easeInOut(duration: 8).repeatForever(autoreverses: true)) {
+                t = .pi * 2
+            }
+        }
+    }
+}
+
+// MARK: - Wave band with no blend modes (safer for List)
+private struct WaveBandSafe: View {
+    var yOffset: CGFloat
+    var thickness: CGFloat
+    var colors: [Color]
+    var blur: CGFloat
+    var rotation: Angle
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width * 1.6
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        gradient: Gradient(colors: colors),
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: w, height: thickness)
+                .rotationEffect(rotation)
+                .offset(x: -w * 0.2, y: yOffset)
+                .blur(radius: blur)
+        }
+        .allowsHitTesting(false)
+        .ignoresSafeArea()
+        .opacity(0.95)
+    }
+}
+
+// MARK: - Reversing shimmer (ease‑in‑out; no blend modes)
+private struct ShimmerSweepAutoReverse: View {
+    var duration: Double = 8   // total time for a forward or backward sweep
+    var bandOpacity: CGFloat = 0.14
+    var blurRadius: CGFloat = 70
+    var angle: Angle = .degrees(35)
+
+    @State private var phase: CGFloat = -0.5  // animates to +0.5 and back (autoreverse)
+
+    var body: some View {
+        GeometryReader { geo in
+            let side = max(geo.size.width, geo.size.height) * 1.2
+            let travel: CGFloat = side + 200               // how far the shimmer travels
+            let offset = phase * travel                    // convert normalized phase → points
+
+            Rectangle()
+                .fill(Color.white.opacity(bandOpacity))
+                .frame(width: side, height: side)
+                .rotationEffect(angle)
+                .offset(x: offset, y: offset)
+                .blur(radius: blurRadius)
+                .mask(
+                    LinearGradient(
+                        gradient: Gradient(stops: [
+                            .init(color: .clear, location: 0.00),
+                            .init(color: .white, location: 0.20),
+                            .init(color: .white, location: 0.40),
+                            .init(color: .clear, location: 0.70),
+                        ]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .onAppear {
+                    withAnimation(.easeInOut(duration: duration).repeatForever(autoreverses: true)) {
+                        phase = 0.5   // -0.5 → +0.5 → -0.5 … smoothly
+                    }
+                }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+
+===== ./ChildRewardsView.swift =====
+
+//
+// ChildRewardsView.swift
+// parent_child_checklist
+//
+// Child screen to submit/view requests with segmented layout, medium‑tight spacing,
+// top-aligned (right) character counter aligned to the TextField trailing,
+// "Request Again" from Claimed, and an inline hint on Pending rows.
+//
+
+import SwiftUI
+import UIKit
+
+// MARK: - Theme tokens (mirrors ChildHomeView for this screen)
+private enum FuturistTheme {
+    static let skyTop = Color(red: 0.02, green: 0.06, blue: 0.16)
+    static let skyBottom = Color(red: 0.01, green: 0.03, blue: 0.10)
+    static let neonAqua = Color(red: 0.20, green: 0.95, blue: 1.00)
+
+    // Cards
+    static let surface = Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+    static let surfaceSolid = Color(red: 0.05, green: 0.10, blue: 0.22)
+
+    // Text
+    static let textPrimary   = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary = Color(red: 0.63, green: 0.73, blue: 0.82)
+}
+
+// Micro-elevation card background (matches Today’s screen)
+private struct CardBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    var cornerRadius: CGFloat = 12
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(reduceTransparency ? FuturistTheme.surfaceSolid : FuturistTheme.surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 2)
+    }
+}
+
+// Gentle dark sweep behind lower content (matches Today’s screen)
+private struct LowerContentSweep: View {
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: .clear, location: 0.00),
+                .init(color: FuturistTheme.skyTop.opacity(0.05), location: 0.50),
+                .init(color: FuturistTheme.skyTop.opacity(0.08), location: 1.00)
+            ]),
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+// Custom neon divider capsule (dark → neon → dark), same as Today’s screen
+private struct TaskRowGradientRule: View {
+    var leadingInset: CGFloat
+    var trailingInset: CGFloat
+    var thickness: CGFloat = 2
+
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 0.00),
+                .init(color: FuturistTheme.neonAqua,             location: 0.50),
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 1.00),
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(height: thickness)
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, ChildRewardsView.ruleLeadingInset)
+        .padding(.trailing, ChildRewardsView.ruleTrailingInset)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+// Simple empty-state card for lists
+private struct EmptyCard: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.subheadline)
+            .foregroundStyle(FuturistTheme.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(CardBackground())
+            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+}
+
+// MARK: - Custom Segmented Pills (higher contrast on dark cards)
+private struct SegmentedPills: View {
+    enum Segment: Hashable { case pending, approved, claimed }
+    @Binding var selected: Segment
+
+    private let selectedBG   = Color.white.opacity(0.15)
+    private let selectedText = Color.white
+    private let unselectedBG = Color.white.opacity(0.06)
+    private let unselectedText = Color.white.opacity(0.80)
+
+    var pendingCount: Int
+    var approvedCount: Int
+    var claimedCount: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            pill(title: "Pending (\(pendingCount))", tag: .pending)
+            pill(title: "Approved (\(approvedCount))", tag: .approved)
+            pill(title: "Claimed (\(claimedCount))", tag: .claimed)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)   // Option B pills card height
+        .background(CardBackground())
+    }
+
+    private func pill(title: String, tag: Segment) -> some View {
+        let isSel = (selected == tag)
+        return Button {
+            selected = tag
+        } label: {
+            Text(title)
+                .font(.subheadline).fontWeight(isSel ? .semibold : .regular)
+                .foregroundStyle(isSel ? selectedText : unselectedText)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)   // Option B: pill height
+                .background((isSel ? selectedBG : unselectedBG), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+    }
+}
+
+// PreferenceKey to capture the Request button width (for aligning the counter to the TextField trailing)
+private struct RequestButtonWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+// MARK: - View
+struct ChildRewardsView: View {
+    let childId: UUID
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    // Input
+    @State private var newRequestTitle: String = ""
+    @FocusState private var composerFocused: Bool
+
+    // Toast
+    @State private var toastMessage: String? = nil
+
+    // Title styling (to match "Today's List")
+    private let nameFontSize: CGFloat = 36
+
+    // Divider & header tunables (identical to Today’s screen)
+    static let ruleLeadingInset: CGFloat = 16
+    static let ruleTrailingInset: CGFloat = 14
+    static let ruleExtraBottomPadding: CGFloat = 6
+    static let ruleVerticalOffset: CGFloat = 6
+
+    // Local colors for meta text on dark cards
+    private let metaColor = Color.white.opacity(0.78)
+
+    // Segments
+    private enum Segment: Hashable { case pending, approved, claimed }
+    @State private var selectedSegment: Segment = .pending
+
+    // Derived child + points
+    private var child: ChildProfile? {
+        appState.children.first { $0.id == childId }
+    }
+    private var pointsValue: Int { appState.childPointsTotal(childId: childId) }
+
+    // All requests for this child (newest first)
+    private var requests: [RewardRequest] {
+        appState.rewardRequests
+            .filter { $0.childId == childId }
+            .sorted { $0.requestedAt > $1.requestedAt }
+    }
+
+    // Segment filters
+    private var pendingRequests: [RewardRequest] {
+        requests.filter { $0.status == .pending }
+    }
+    private var notApprovedRequests: [RewardRequest] {
+        requests.filter { $0.status == .notApproved }
+    }
+    private var approvedRequests: [RewardRequest] {
+        requests.filter { $0.status == .approved }
+    }
+    private var claimedRequests: [RewardRequest] {
+        requests.filter { $0.status == .claimed }
+    }
+
+    // Composer preview & limit logic
+    private let previewTriggerCount: Int = 22
+    private let maxCharacters: Int = 160
+    @State private var showPreview: Bool = false
+    private var shouldShowPreview: Bool { composerFocused && newRequestTitle.count >= previewTriggerCount }
+    private var atLimit: Bool { newRequestTitle.count >= maxCharacters }
+
+    // For aligning the counter with TextField trailing
+    @State private var requestButtonWidth: CGFloat = 0
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                CurvyAquaBlueBackground(animate: true)
+
+                VStack(spacing: 0) {
+                    if let child {
+                        ChildHeaderView(child: child, points: pointsValue)
+                            .padding(.horizontal)
+                        Text("Requests")
+                            .font(.system(size: nameFontSize, weight: .regular))
+                            .foregroundStyle(FuturistTheme.textPrimary)
+                            .padding(.top, 2)
+
+                        ZStack {
+                            LowerContentSweep()
+                            screenContent
+                        }
+                    } else {
+                        VStack {
+                            Spacer()
+                            Text("That child profile can’t be found.")
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                            Spacer()
+                        }
+                    }
+                }
+
+                if let toastMessage {
+                    ToastBannerView(message: toastMessage)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(10)
+                }
+            }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarHidden(true)
+        }
+    }
+
+    // MARK: - Screen content (composer card + custom segmented pills + segmented lists)
+    private var screenContent: some View {
+        // Option B: medium-tight vertical rhythm
+        VStack(spacing: 6) {
+            composerCard
+                .padding(.horizontal)
+
+            SegmentedPills(
+                selected: Binding(
+                    get: {
+                        switch selectedSegment {
+                        case .pending:  return .pending
+                        case .approved: return .approved
+                        case .claimed:  return .claimed
+                        }
+                    },
+                    set: { seg in
+                        switch seg {
+                        case .pending:  selectedSegment = .pending
+                        case .approved: selectedSegment = .approved
+                        case .claimed:  selectedSegment = .claimed
+                        }
+                    }
+                ),
+                pendingCount: pendingRequests.count,
+                approvedCount: approvedRequests.count,
+                claimedCount: claimedRequests.count
+            )
+            .padding(.horizontal)
+            .padding(.bottom, 1) // tiny gap before the first section header
+
+            segmentedLists
+        }
+        .padding(.top, 6) // slightly tighter under the big title
+    }
+
+    // Composer Card (input + preview + counter (moved to header))
+    private var composerCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+
+            // Header row: Make a Request (left) + counter (right, aligned to TextField trailing)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Make a Request")
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .font(.headline)
+
+                Spacer(minLength: 8)
+
+                // The trailing padding equals the Request button width + HStack spacing (8),
+                // so this counter aligns with the TextField's trailing edge.
+                Text("\(newRequestTitle.count)/\(maxCharacters)")
+                    .font(.caption)
+                    .foregroundStyle(atLimit ? Color.red : metaColor)
+                    .padding(.trailing, requestButtonWidth + 8)
+                    .accessibilityLabel("Characters used \(newRequestTitle.count) of \(maxCharacters)")
+            }
+            .padding(.top, 2)
+
+            // Input row: single-line field + Request button
+            HStack(spacing: 8) {
+                TextField("What would you like to earn? (e.g. Go to the movies)", text: $newRequestTitle)
+                    .textInputAutocapitalization(.sentences)
+                    .autocorrectionDisabled(false)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(reduceTransparency ? FuturistTheme.surfaceSolid : Color.white.opacity(0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .focused($composerFocused)
+                    .onChange(of: newRequestTitle) { _, _ in
+                        if newRequestTitle.count > maxCharacters {
+                            newRequestTitle = String(newRequestTitle.prefix(maxCharacters))
+                        }
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            showPreview = shouldShowPreview
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        showPreview = false
+                    }
+                    createRequest()
+                } label: {
+                    Text("Request")
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .foregroundStyle(.white)
+                        // Measure the button so we can align the counter to the TextField trailing above
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear
+                                    .preference(key: RequestButtonWidthKey.self, value: geo.size.width)
+                            }
+                        )
+                }
+                .onPreferenceChange(RequestButtonWidthKey.self) { requestButtonWidth = $0 }
+                .disabled(newRequestTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Your parent will review your request and set how many gems it costs.")
+                .accessibilityLabel("Send request")
+            }
+            .onChange(of: composerFocused) { _, _ in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    showPreview = shouldShowPreview
+                }
+            }
+
+            // Multi-line Preview (optional)
+            if showPreview {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(newRequestTitle)
+                        .font(.body)
+                        .foregroundStyle(FuturistTheme.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(4)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text("Preview")
+                        .font(.caption2)
+                        .foregroundStyle(FuturistTheme.textSecondary)
+                        .accessibilityHidden(true)
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(reduceTransparency ? FuturistTheme.surfaceSolid : Color.white.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .accessibilityLabel("Preview of your request")
+                .accessibilityHint("Shows the full text while typing")
+            }
+        }
+        .padding(12)
+        .background(CardBackground())
+    }
+
+    // Segmented lists below the pills
+    private var segmentedLists: some View {
+        Group {
+            switch selectedSegment {
+            case .pending:
+                pendingList
+            case .approved:
+                approvedList
+            case .claimed:
+                claimedList
+            }
+        }
+    }
+
+    // MARK: - Lists
+
+    private var pendingList: some View {
+        List {
+            // Pending items (editable)
+            Section {
+                if pendingRequests.isEmpty {
+                    EmptyCard(text: "No pending requests to display.")
+                } else {
+                    ForEach(Array(pendingRequests.enumerated()), id: \.element.id) { index, req in
+                        VStack(spacing: 0) {
+                            RewardRequestRowView(
+                                request: req,
+                                childBalance: appState.childPointsTotal(childId: childId),
+                                onEdit: { newTitle in
+                                    _ = appState.updateRewardRequestTitle(id: req.id, newTitle: newTitle)
+                                },
+                                onDelete: {
+                                    _ = appState.deleteRewardRequest(id: req.id)
+                                },
+                                onClaim: {},
+                                onRequestAgain: { _ in },
+                                headlineColor: FuturistTheme.textPrimary,
+                                metaColor: metaColor
+                            )
+                        }
+                        .padding(.bottom, Self.ruleExtraBottomPadding)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(CardBackground())
+                        .overlay(alignment: .bottomLeading) {
+                            if index < pendingRequests.count - 1 {
+                                TaskRowGradientRule(
+                                    leadingInset: Self.ruleLeadingInset,
+                                    trailingInset: Self.ruleTrailingInset,
+                                    thickness: 2
+                                )
+                                .offset(y: Self.ruleVerticalOffset)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Pending")
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .textCase(nil)
+                    .padding(.top, 1)
+                    .padding(.bottom, 1)
+            }
+
+            // Earlier Decisions (Not approved) — read-only, neutral
+            if !notApprovedRequests.isEmpty {
+                Section {
+                    ForEach(Array(notApprovedRequests.enumerated()), id: \.element.id) { index, req in
+                        VStack(spacing: 0) {
+                            RewardRequestRowView(
+                                request: req,
+                                childBalance: appState.childPointsTotal(childId: childId),
+                                onEdit: { _ in },
+                                onDelete: { _ = appState.deleteRewardRequest(id: req.id) },
+                                onClaim: {},
+                                onRequestAgain: { _ in }, // could enable later
+                                headlineColor: FuturistTheme.textPrimary,
+                                metaColor: metaColor
+                            )
+                        }
+                        .padding(.bottom, Self.ruleExtraBottomPadding)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(CardBackground())
+                        .overlay(alignment: .bottomLeading) {
+                            if index < notApprovedRequests.count - 1 {
+                                TaskRowGradientRule(
+                                    leadingInset: Self.ruleLeadingInset,
+                                    trailingInset: Self.ruleTrailingInset,
+                                    thickness: 2
+                                )
+                                .offset(y: Self.ruleVerticalOffset)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Earlier Decisions")
+                        .foregroundStyle(FuturistTheme.textPrimary)
+                        .textCase(nil)
+                        .padding(.top, 1)
+                        .padding(.bottom, 1)
+                }
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .listStyle(.insetGrouped)
+    }
+
+    private var approvedList: some View {
+        List {
+            Section {
+                if approvedRequests.isEmpty {
+                    EmptyCard(text: "No approved requests available to claim.")
+                } else {
+                    ForEach(Array(approvedRequests.enumerated()), id: \.element.id) { index, req in
+                        VStack(spacing: 0) {
+                            RewardRequestRowView(
+                                request: req,
+                                childBalance: appState.childPointsTotal(childId: childId),
+                                onEdit: { _ in },
+                                onDelete: { _ = appState.deleteRewardRequest(id: req.id) },
+                                onClaim: {
+                                    if appState.claimRewardRequest(id: req.id) {
+                                        showToast("Enjoy! Gems spent.")
+                                    } else {
+                                        showToast("Not enough gems yet.")
+                                    }
+                                },
+                                onRequestAgain: { _ in },
+                                headlineColor: FuturistTheme.textPrimary,
+                                metaColor: metaColor
+                            )
+                        }
+                        .padding(.bottom, Self.ruleExtraBottomPadding)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(CardBackground())
+                        .overlay(alignment: .bottomLeading) {
+                            if index < approvedRequests.count - 1 {
+                                TaskRowGradientRule(
+                                    leadingInset: Self.ruleLeadingInset,
+                                    trailingInset: Self.ruleTrailingInset,
+                                    thickness: 2
+                                )
+                                .offset(y: Self.ruleVerticalOffset)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Approved")
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .textCase(nil)
+                    .padding(.top, 1)
+                    .padding(.bottom, 1)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .listStyle(.insetGrouped)
+    }
+
+    private var claimedList: some View {
+        List {
+            Section {
+                if claimedRequests.isEmpty {
+                    EmptyCard(text: "No claimed rewards yet.")
+                } else {
+                    ForEach(Array(claimedRequests.enumerated()), id: \.element.id) { index, req in
+                        VStack(spacing: 0) {
+                            RewardRequestRowView(
+                                request: req,
+                                childBalance: appState.childPointsTotal(childId: childId),
+                                onEdit: { _ in },
+                                onDelete: { _ = appState.deleteRewardRequest(id: req.id) },
+                                onClaim: {},
+                                onRequestAgain: { title in
+                                    if appState.createRewardRequest(childId: childId, title: title) != nil {
+                                        selectedSegment = .pending
+                                        showToast("Request sent to parent.")
+                                    } else {
+                                        showToast("Couldn’t create request. Try again.")
+                                    }
+                                },
+                                headlineColor: FuturistTheme.textPrimary,
+                                metaColor: metaColor
+                            )
+                        }
+                        .padding(.bottom, Self.ruleExtraBottomPadding)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(CardBackground())
+                        .overlay(alignment: .bottomLeading) {
+                            if index < claimedRequests.count - 1 {
+                                TaskRowGradientRule(
+                                    leadingInset: Self.ruleLeadingInset,
+                                    trailingInset: Self.ruleTrailingInset,
+                                    thickness: 2
+                                )
+                                .offset(y: Self.ruleVerticalOffset)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Claimed")
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .textCase(nil)
+                    .padding(.top, 1)
+                    .padding(.bottom, 1)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .listStyle(.insetGrouped)
+    }
+
+    // MARK: - Actions
+    private func createRequest() {
+        let t = newRequestTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+
+        if appState.createRewardRequest(childId: childId, title: t) != nil {
+            newRequestTitle = ""
+            composerFocused = false
+            selectedSegment = .pending
+            showToast("Request sent to parent.")
+        } else {
+            composerFocused = false
+            showToast("Couldn’t create request. Try again.")
+        }
+    }
+
+    private func showToast(_ message: String) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+            toastMessage = message
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                toastMessage = nil
+            }
+        }
+    }
+}
+
+// MARK: - Request row (child) — themed to match dark cards
+private struct RewardRequestRowView: View {
+    let request: RewardRequest
+    let childBalance: Int
+    let onEdit: (String) -> Void
+    let onDelete: () -> Void
+    let onClaim: () -> Void
+    let onRequestAgain: (String) -> Void
+
+    var headlineColor: Color = FuturistTheme.textPrimary
+    var metaColor: Color = Color.white.opacity(0.78)
+
+    @State private var editing: Bool = false
+    @State private var editText: String = ""
+
+    private var canEdit: Bool { request.status == .pending }
+    private var canClaim: Bool {
+        request.status == .approved && (request.approvedCost ?? .max) <= childBalance && (request.approvedCost ?? 0) > 0
+    }
+
+    private func statusDateLine() -> String {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .none
+        switch request.status {
+        case .claimed:
+            if let d = request.claimedAt { return "Claimed on \(df.string(from: d))" }
+            if let d = request.approvedAt { return "Approved on \(df.string(from: d))" }
+            if let d = request.notApprovedAt { return "Not this time on \(df.string(from: d))" }
+            return "Requested on \(df.string(from: request.requestedAt))"
+        case .approved:
+            if let d = request.approvedAt { return "Approved on \(df.string(from: d))" }
+            return "Requested on \(df.string(from: request.requestedAt))"
+        case .notApproved:
+            if let d = request.notApprovedAt { return "Not this time on \(df.string(from: d))" }
+            return "Requested on \(df.string(from: request.requestedAt))"
+        case .pending:
+            return "Requested on \(df.string(from: request.requestedAt))"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Title + status badge OR editor
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if editing && canEdit {
+                    TextField("Edit request", text: $editText)
+                        .textInputAutocapitalization(.sentences)
+                        .autocorrectionDisabled(false)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        )
+                        .onAppear { editText = request.title }
+                        .foregroundStyle(headlineColor)
+                } else {
+                    Text(request.title)
+                        .font(.headline)
+                        .foregroundStyle(headlineColor)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
+                statusChip
+            }
+
+            // Status-specific date line
+            Text(statusDateLine())
+                .font(.footnote)
+                .foregroundStyle(metaColor)
+
+            // Actions row (now includes a small hint for Pending)
+            HStack(spacing: 10) {
+                if request.status == .pending {
+                    Text("Parent will set the gem cost")
+                        .font(.caption)
+                        .foregroundStyle(metaColor)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                if canEdit {
+                    if editing {
+                        Button("Save") {
+                            let t = editText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !t.isEmpty { onEdit(t) }
+                            editing = false
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("Cancel") { editing = false }
+                            .buttonStyle(.bordered)
+                    } else {
+                        Button("Edit") { editing = true }
+                            .buttonStyle(.bordered)
+                    }
+                }
+
+                if request.status == .approved {
+                    Button("Claim") { onClaim() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canClaim)
+                        .accessibilityHint(canClaim ? "" : "Not enough gems yet")
+                }
+
+                Menu {
+                    if request.status == .claimed {
+                        Button {
+                            onRequestAgain(request.title)
+                        } label: {
+                            Label("Request Again", systemImage: "arrow.uturn.left.circle")
+                        }
+                    }
+                    Button(role: .destructive) { onDelete() } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                        .foregroundStyle(metaColor)
+                }
+                .contentShape(Rectangle())
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var statusChip: some View {
+        let text = request.status.childDisplay
+        let (bg, fg): (Color, Color) = {
+            switch request.status {
+            case .pending:
+                return (Color.yellow.opacity(0.22), Color.orange)
+            case .approved:
+                return (Color.green.opacity(0.22), Color.green)
+            case .notApproved:
+                return (Color.white.opacity(0.14), Color.white.opacity(0.90))
+            case .claimed:
+                return (Color.blue.opacity(0.22), Color.blue)
+            }
+        }()
+        return Text(text)
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(fg)
+            .background(bg, in: Capsule())
+    }
+}
+
+
+===== ./AddEventTemplateView.swift =====
+
+//
+// AddEventTemplateView.swift
+// parent_child_checklist
+//
+
+import SwiftUI
+
+struct AddEventTemplateView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    // NEW: Callbacks so the presenting view (e.g., SelectEventTemplateView) can react
+    var onSaved: ((EventTemplate) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
+
+    @State private var title: String = ""
+    @State private var selectedEmoji: String? = nil
+    @State private var selectedCategory: EmojiCatalog.Category = .all
+    @State private var validationMessage: String? = nil
+    @FocusState private var titleFocused: Bool
+
+    @State private var showMyEmojisSheet = false
+
+    private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
+
+    private var trimmedTitle: String { title.trimmed }
+
+    private var isDuplicate: Bool {
+        !trimmedTitle.isEmpty && appState.isEventTitleTaken(trimmedTitle)
+    }
+
+    private var canSave: Bool {
+        !trimmedTitle.isEmpty && !isDuplicate && (selectedEmoji != nil)
+    }
+
+    private var baseEmojis: [String] {
+        switch selectedCategory {
+        case .myEmojis:
+            return appState.customEmojis
+        default:
+            return EmojiCatalog.emojis(for: selectedCategory)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Event") {
+                    TextField("Title", text: $title)
+                        .focused($titleFocused)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled(true)
+
+                    if isDuplicate {
+                        Text("That event already exists. Please choose a different name.")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    } else if let validationMessage {
+                        Text(validationMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                Section("Icon (Emoji)") {
+                    HStack {
+                        Text("Selected")
+                        Spacer()
+                        if let selectedEmoji {
+                            Text(selectedEmoji).font(.system(size: 32))
+                        } else {
+                            Text("—").foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Picker("Category", selection: $selectedCategory) {
+                        ForEach(EmojiCatalog.Category.allCases) { cat in
+                            Text(cat.rawValue).tag(cat)
+                        }
+                    }
+
+                    // Grid (no text search)
+                    ScrollView {
+                        LazyVGrid(columns: gridColumns, spacing: 10) {
+                            ForEach(baseEmojis, id: \.self) { emoji in
+                                Button {
+                                    selectedEmoji = emoji
+                                    validationMessage = nil
+                                } label: {
+                                    Text(emoji)
+                                        .font(.system(size: 24))
+                                        .frame(maxWidth: .infinity, minHeight: 36)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .fill(selectedEmoji == emoji ? Color.blue.opacity(0.18) : Color.clear)
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .stroke(
+                                                    selectedEmoji == emoji ? Color.blue : Color.secondary.opacity(0.25),
+                                                    lineWidth: selectedEmoji == emoji ? 2 : 1
+                                                )
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(emoji)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(minHeight: 240, maxHeight: 360)
+                    .scrollIndicators(.visible)
+
+                    if selectedCategory == .myEmojis, appState.customEmojis.isEmpty {
+                        Text("No saved emojis yet. Tap “Manage My Emojis” below to add some.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Add Event")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        onCancel?()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(!canSave)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 0) {
+                    Divider()
+                    Button {
+                        showMyEmojisSheet = true
+                    } label: {
+                        HStack {
+                            Text("Manage My Emojis")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: "chevron.up")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal)
+                    }
+                    .buttonStyle(.plain)
+                    .background(.ultraThinMaterial)
+                }
+            }
+            .sheet(isPresented: $showMyEmojisSheet) {
+                CustomEmojiLibraryView { picked in
+                    selectedEmoji = picked
+                    selectedCategory = .myEmojis
+                }
+                .environmentObject(appState)
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    titleFocused = true
+                }
+            }
+            .onChange(of: title) { _, _ in validationMessage = nil }
+        }
+    }
+
+    private func save() {
+        validationMessage = nil
+        guard !trimmedTitle.isEmpty else {
+            validationMessage = "Please enter an event title."
+            return
+        }
+        guard !isDuplicate else {
+            validationMessage = "That event already exists. Please choose a different name."
+            return
+        }
+        guard let emoji = selectedEmoji, !emoji.trimmed.isEmpty else {
+            validationMessage = "Please select an emoji."
+            return
+        }
+
+        // Capture the created template and pass it back via onSaved
+        if let created = appState.createEventTemplate(title: trimmedTitle, iconSymbol: emoji) {
+            onSaved?(created)
+            dismiss()
+        } else {
+            validationMessage = "Couldn’t create event. Please try again."
+        }
+    }
+}
+
+
+===== ./Models.swift =====
+
+//
+// Models.swift
+// parent_child_checklist
+//
+
+import Foundation
+import SwiftUI
+
+// MARK: - Shared Notify Recipient (for Tasks & Events notifications)
+
+enum NotifyRecipient: String, Codable, Hashable, CaseIterable, Identifiable {
+    case both
+    case parent
+    case child
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .both: return "Both"
+        case .parent: return "Parent"
+        case .child: return "Child"
+        }
+    }
+}
+
+// Represents a child profile in the family
+struct ChildProfile: Identifiable, Hashable, Codable {
+    let id: UUID
+    var name: String
+    var colorHex: String
+    /// Child-chosen avatar preset ID.
+    /// - nil means "Not chosen yet" (show placeholder in parent UI).
+    var avatarId: String?
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        colorHex: String,
+        avatarId: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.colorHex = colorHex
+        self.avatarId = avatarId
+    }
+}
+
+// Parent-created reusable tasks (Task Library / Templates)
+struct TaskTemplate: Identifiable, Hashable, Codable {
+    let id: UUID
+    var title: String
+    /// Emoji string stored here
+    var iconSymbol: String
+    /// Reward points for completing this task (min 0)
+    var rewardPoints: Int
+    var createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        iconSymbol: String,
+        rewardPoints: Int = 1,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.title = title
+        self.iconSymbol = iconSymbol
+        self.rewardPoints = max(0, rewardPoints)
+        self.createdAt = createdAt
+    }
+
+    // Defensive decoding for older local JSON
+    enum CodingKeys: String, CodingKey {
+        case id, title, iconSymbol, rewardPoints, createdAt
+    }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
+        title = (try? container.decode(String.self, forKey: .title)) ?? ""
+        iconSymbol = (try? container.decode(String.self, forKey: .iconSymbol)) ?? "✅"
+        createdAt = (try? container.decode(Date.self, forKey: .createdAt)) ?? Date()
+        // If rewardPoints is missing (old saved data), default to 1
+        let decodedPoints = (try? container.decode(Int.self, forKey: .rewardPoints)) ?? 1
+        rewardPoints = max(0, decodedPoints)
+    }
+}
+
+// MARK: - Task Assignment (Child-specific, fully captured snapshot)
+
+struct TaskAssignment: Identifiable, Hashable, Codable {
+    enum Occurrence: String, Codable, CaseIterable, Identifiable {
+        case onceOnly
+        case specifiedDays
+        var id: String { rawValue }
+        var displayName: String {
+            switch self {
+            case .onceOnly: return "Once Only"
+            case .specifiedDays: return "Specified Days"
+            }
+        }
+    }
+
+    let id: UUID
+
+    // Ownership
+    var childId: UUID
+    /// Optional reference to the template used at assignment time.
+    /// We keep the snapshot fields below as the source of truth.
+    var templateId: UUID?
+
+    // Snapshot
+    var taskTitle: String
+    var taskIcon: String
+    var rewardPoints: Int
+
+    // Optional guidance
+    var helper: String?
+
+    // Options
+    var subtractIfNotCompleted: Bool
+    var alertMe: Bool
+    var photoEvidenceRequired: Bool
+    var isActive: Bool
+
+    // Dates
+    var startDate: Date
+    var endDate: Date?
+
+    // Schedule
+    var occurrenc

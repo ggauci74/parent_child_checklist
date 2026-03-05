@@ -11,19 +11,26 @@ struct EditEventTemplateView: View {
 
     let template: EventTemplate
 
+    // NEW: Callbacks so the presenting view (e.g., SelectEventTemplateView) can react
+    var onSaved: ((EventTemplate) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
+
     @State private var title: String
-    @State private var searchText: String = ""
     @State private var selectedEmoji: String
     @State private var selectedCategory: EmojiCatalog.Category = .all
     @State private var validationMessage: String? = nil
     @FocusState private var titleFocused: Bool
-
     @State private var showMyEmojisSheet = false
 
     private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
 
-    init(template: EventTemplate) {
+    /// Keep the original convenience while allowing callbacks.
+    init(template: EventTemplate,
+         onSaved: ((EventTemplate) -> Void)? = nil,
+         onCancel: (() -> Void)? = nil) {
         self.template = template
+        self.onSaved = onSaved
+        self.onCancel = onCancel
         _title = State(initialValue: template.title)
         _selectedEmoji = State(initialValue: template.iconSymbol)
     }
@@ -35,15 +42,15 @@ struct EditEventTemplateView: View {
     }
 
     private var hasChanges: Bool {
-        trimmedTitle != template.title.trimmed ||
-        selectedEmoji != template.iconSymbol
+        trimmedTitle != template.title.trimmed
+        || selectedEmoji != template.iconSymbol
     }
 
     private var canSave: Bool {
-        !trimmedTitle.isEmpty &&
-        !isDuplicate &&
-        selectedEmoji.trimmed.containsEmoji &&
-        hasChanges
+        !trimmedTitle.isEmpty
+        && !isDuplicate
+        && selectedEmoji.trimmed.containsEmoji
+        && hasChanges
     }
 
     private var baseEmojis: [String] {
@@ -53,12 +60,6 @@ struct EditEventTemplateView: View {
         default:
             return EmojiCatalog.emojis(for: selectedCategory)
         }
-    }
-
-    private var filteredEmojis: [String] {
-        let q = searchText.trimmed
-        if q.isEmpty { return baseEmojis }
-        return baseEmojis.filter { $0.contains(q) }
     }
 
     var body: some View {
@@ -95,13 +96,10 @@ struct EditEventTemplateView: View {
                         }
                     }
 
-                    TextField("Search", text: $searchText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-
+                    // Grid (no text search)
                     ScrollView {
                         LazyVGrid(columns: gridColumns, spacing: 10) {
-                            ForEach(filteredEmojis, id: \.self) { emoji in
+                            ForEach(baseEmojis, id: \.self) { emoji in
                                 Button {
                                     selectedEmoji = emoji
                                     validationMessage = nil
@@ -140,7 +138,10 @@ struct EditEventTemplateView: View {
             .navigationTitle("Edit Event")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        onCancel?()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
@@ -171,7 +172,6 @@ struct EditEventTemplateView: View {
                 CustomEmojiLibraryView { picked in
                     selectedEmoji = picked
                     selectedCategory = .myEmojis
-                    searchText = ""
                 }
                 .environmentObject(appState)
             }
@@ -181,7 +181,6 @@ struct EditEventTemplateView: View {
                 }
             }
             .onChange(of: title) { _, _ in validationMessage = nil }
-            .onChange(of: selectedCategory) { _, _ in searchText = "" }
         }
     }
 
@@ -208,6 +207,10 @@ struct EditEventTemplateView: View {
         )
 
         if ok {
+            // Fetch updated from AppState and pass it back to the presenter
+            if let updated = appState.eventTemplates.first(where: { $0.id == template.id }) {
+                onSaved?(updated)
+            }
             dismiss()
         } else {
             validationMessage = "Couldn’t save changes. Try again."
