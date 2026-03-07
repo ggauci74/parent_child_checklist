@@ -1,19 +1,111 @@
 //
-// PointsHistoryView.swift
-// parent_child_checklist
+//  PointsHistoryView.swift
+//  parent_child_checklist
 //
-// Read-only ledger history for a child:
-// - Shows current balance at the top
-// - Shows last N days (matches AppState.ledgerWindowDays)
-// - Adds a "Balance carried forward" snapshot item at cutoff when older entries existed
-// - Coalesces bursty manual adjustments (±1 taps) into a single display row
-// - Shows task titles for completed/un-ticked entries
-// - Shows reward titles for claimed entries
-// - The small subtitle row places the time first, then the item title (if any)
+//  Read-only ledger history for a child (Futurist theme):
+//  - Curvy background, safe-area header (Close pill + centered title + Clean pill)
+//  - Frosted cards + neon filament separators (non-breathing ScrollView)
+//  - Balance card at the top
+//  - Day sections with cardized entries
 //
 
 import SwiftUI
+import UIKit
 
+// MARK: - Futurist theme tokens (aligned with your other screens)
+private enum FuturistTheme {
+    static let neonAqua      = Color(red: 0.20, green: 0.95, blue: 1.00)
+    static let textPrimary   = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary = Color.white.opacity(0.78)
+    static let cardStroke    = Color.white.opacity(0.08)
+    static let divider       = Color.white.opacity(0.10)
+    static let cardShadow    = Color.black.opacity(0.10)
+
+    // Surfaces
+    static let surfaceSolid = Color(red: 0.05, green: 0.10, blue: 0.22)
+    static let surfaceFrost = Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+}
+
+// MARK: - Layout metrics
+private enum PageMetrics {
+    static let pageHPad: CGFloat     = 12
+    static let innerHPad: CGFloat    = 16
+    static let cornerRadius: CGFloat = 14
+    static let cardShadowRadius: CGFloat = 4
+    static let cardShadowYOffset: CGFloat = 1
+}
+
+// MARK: - Frosted card container
+private struct FrostedCard<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    let content: () -> Content
+    init(@ViewBuilder content: @escaping () -> Content) { self.content = content }
+
+    var body: some View {
+        let fill = reduceTransparency ? FuturistTheme.surfaceSolid : FuturistTheme.surfaceFrost
+        return VStack(alignment: .leading, spacing: 10) { content() }
+            .padding(.vertical, 12)
+            .padding(.horizontal, PageMetrics.innerHPad)
+            .background(
+                RoundedRectangle(cornerRadius: PageMetrics.cornerRadius, style: .continuous)
+                    .fill(fill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: PageMetrics.cornerRadius, style: .continuous)
+                    .stroke(FuturistTheme.cardStroke, lineWidth: 1)
+            )
+            .shadow(color: FuturistTheme.cardShadow, radius: PageMetrics.cardShadowRadius, x: 0, y: PageMetrics.cardShadowYOffset)
+    }
+}
+
+// MARK: - Bright cyan filament (separator between cards)
+private struct BrightLineSeparator: View {
+    var leadingInset: CGFloat = 16
+    var trailingInset: CGFloat = 14
+    var thickness: CGFloat = 2
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.95), location: 0.00),
+                .init(color: FuturistTheme.neonAqua, location: 0.50),
+                .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.95), location: 1.00)
+            ]),
+            startPoint: .leading, endPoint: .trailing
+        )
+        .frame(height: thickness)
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, leadingInset)
+        .padding(.trailing, trailingInset)
+        .padding(.horizontal, PageMetrics.pageHPad)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Toolbar pill button (Close / Clean)
+private struct ToolbarPillButton: View {
+    let label: String
+    var foreground: Color
+    var background: Color
+    var stroke: Color
+    var fixedWidth: CGFloat? = 76
+    var fixedHeight: CGFloat? = 32
+    var action: () -> Void
+
+    var body: some View {
+        Text(label)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(foreground)
+            .frame(width: fixedWidth, height: fixedHeight)
+            .background(Capsule().fill(background))
+            .overlay(Capsule().stroke(stroke, lineWidth: 1))
+            .shadow(color: FuturistTheme.cardShadow, radius: 3)
+            .contentShape(Capsule())
+            .onTapGesture { action() }
+    }
+}
+
+// MARK: - Main
 struct PointsHistoryView: View {
     let childId: UUID
     @EnvironmentObject private var appState: AppState
@@ -95,19 +187,18 @@ struct PointsHistoryView: View {
                 let resolvedRewardTitle: String? = (e.reason == .redeemed) ? findClaimedRewardTitle(matching: e) : nil
 
                 if let last = rows.last,
-                   // Coalesce only when both are manualAdjust, same day, close in time
                    last.reason == .manualAdjust,
                    e.reason == .manualAdjust,
                    Calendar.current.isDate(last.day, inSameDayAs: day),
                    abs(last.createdAt.timeIntervalSince(e.createdAt)) <= burstWindow {
-                    // Merge into the last row: sum delta, keep latest createdAt (last), keep any titles (none for manual)
+                    // Merge into last
                     let merged = DisplayRow(
                         day: last.day,
                         createdAt: last.createdAt,
                         delta: last.delta + e.delta,
                         reason: .manualAdjust,
                         assignmentId: nil,
-                        isSnapshot: last.isSnapshot, // should be false for manual entries
+                        isSnapshot: last.isSnapshot,
                         coalescedCount: last.coalescedCount + 1,
                         taskTitle: nil,
                         rewardTitle: nil
@@ -134,86 +225,198 @@ struct PointsHistoryView: View {
     }
 
     // Current balance text
-    private var balanceText: String {
-        String(appState.childPointsTotal(childId: childId))
-    }
+    private var balanceText: String { String(appState.childPointsTotal(childId: childId)) }
+
+    // MARK: - Clean confirmation state
+    @State private var showCleanConfirm: Bool = false
+    @State private var cleanPreview: AppState.HistoryCleanPreview? = nil
+    @State private var showingNothingToCleanToast: Bool = false
 
     var body: some View {
         NavigationStack {
-            List {
-                // Balance summary at top
-                Section {
-                    HStack(spacing: 10) {
-                        Text("💎")
-                            .font(.system(size: 24))
-                        Text(balanceText)
-                            .font(.system(size: 24, weight: .bold))
+            ZStack(alignment: .top) {
+                CurvyAquaBlueBackground(animate: true)
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 0) {
+
+                        // ===== Balance card =====
+                        FrostedCard {
+                            HStack(spacing: 10) {
+                                Text("💎")
+                                    .font(.system(size: 24))
+                                Text(balanceText)
+                                    .font(.system(size: 24, weight: .bold))
+                                Spacer()
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("Current balance")
+                            .accessibilityValue(balanceText)
+                            .foregroundStyle(FuturistTheme.textPrimary)
+                        }
+                        .padding(.horizontal, PageMetrics.pageHPad)
+                        .padding(.top, 12)
+
+                        // If there was older history but compactor didn’t insert a snapshot, show neutral carried-forward 0.
+                        if hadOlderHistory && !groupedDisplay.contains(where: { $0.rows.contains(where: { $0.isSnapshot }) }) {
+                            BrightLineSeparator()
+                            FrostedCard {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text("Balance carried forward")
+                                        Spacer()
+                                        Text("💎 0")
+                                            .fontWeight(.semibold)
+                                            .foregroundStyle(FuturistTheme.textSecondary)
+                                    }
+                                    .font(.subheadline)
+                                    Text("Older history summarized at \(formatDate(cutoffDay)).")
+                                        .font(.footnote)
+                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                }
+                                .foregroundStyle(FuturistTheme.textPrimary)
+                            }
+                            .padding(.horizontal, PageMetrics.pageHPad)
+                        }
+
+                        // ===== Day sections =====
+                        if groupedDisplay.isEmpty && !hadOlderHistory {
+                            BrightLineSeparator()
+                            FrostedCard {
+                                Text("No history yet.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 4)
+                            }
+                            .padding(.horizontal, PageMetrics.pageHPad)
+                        } else {
+                            ForEach(groupedDisplay) { group in
+                                // Day header
+                                Text(sectionHeader(group.day))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.top, 12)
+                                    .padding(.horizontal, PageMetrics.pageHPad)
+
+                                // Entries for the day
+                                LazyVStack(spacing: 0) {
+                                    ForEach(Array(group.rows.enumerated()), id: \.element.id) { idx, row in
+                                        FrostedCard {
+                                            historyRowContent(row)
+                                        }
+                                        .padding(.horizontal, PageMetrics.pageHPad)
+
+                                        if idx < group.rows.count - 1 {
+                                            BrightLineSeparator()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(minLength: 24)
+                    }
+                    .padding(.bottom, 24)
+                }
+
+                // Tiny toast if there's nothing to clean
+                if showingNothingToCleanToast {
+                    VStack {
+                        Text("Nothing to clean")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule().fill(Color.white.opacity(0.12))
+                            )
+                            .overlay(
+                                Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                            )
+                            .foregroundStyle(FuturistTheme.textPrimary)
+                            .shadow(color: Color.black.opacity(0.25), radius: 3)
                         Spacer()
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Current balance")
-                    .accessibilityValue(balanceText)
-                }
-
-                // If there was older history but the compactor didn’t insert a snapshot (net 0),
-                // show a neutral "carried forward 0" line so the cutoff is obvious.
-                if hadOlderHistory && !groupedDisplay.contains(where: { group in
-                    group.rows.contains(where: { $0.isSnapshot })
-                }) {
-                    Section {
-                        HStack {
-                            Text("Balance carried forward")
-                            Spacer()
-                            Text("💎 0")
-                                .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
-                        }
-                        .font(.subheadline)
-                    } footer: {
-                        Text("Older history summarized at \(formatDate(cutoffDay)).")
-                    }
-                }
-
-                // Render grouped sections
-                ForEach(groupedDisplay) { group in
-                    Section(header: Text(sectionHeader(group.day))) {
-                        ForEach(group.rows) { row in
-                            historyRow(row)
-                        }
-                    }
-                }
-
-                if groupedDisplay.isEmpty && !hadOlderHistory {
-                    Section {
-                        Text("No history yet.")
-                            .foregroundStyle(.secondary)
-                    }
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(10)
                 }
             }
-            .navigationTitle("\(child?.name ?? "Child") — History")
+            // Hide system nav; themed header below
+            .toolbar(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { dismiss() }
+
+            // Header (Close pill + centered title + Clean pill)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                let topSpacer: CGFloat = 8
+                ZStack {
+                    Text("\(child?.name ?? "Child") — History")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(FuturistTheme.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: topSpacer)
+                        HStack {
+                            // Close (left)
+                            ToolbarPillButton(
+                                label: "Close",
+                                foreground: .white,
+                                background: Color(red: 1.00, green: 0.58, blue: 0.63), // softRedLight
+                                stroke: Color(red: 1.00, green: 0.36, blue: 0.43).opacity(0.75), // softRedBase
+                                action: { dismiss() }
+                            )
+                            Spacer()
+                            // Clean (right)
+                            ToolbarPillButton(
+                                label: "Clean",
+                                foreground: Color.black.opacity(0.9),
+                                background: Color.white, // high contrast
+                                stroke: Color.white.opacity(0.85),
+                                action: { onTapClean() }
+                            )
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                    }
                 }
+                .background(Color.clear)
+            }
+
+            // Confirm clean dialog
+            .alert("Clean history for \(child?.name ?? "this child")?",
+                   isPresented: $showCleanConfirm,
+                   presenting: cleanPreview) { preview in
+                Button("Clean", role: .destructive) {
+                    _ = appState.cleanChildPointsHistory(childId: childId)
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: { preview in
+                Text("""
+                     We’ll remove rows that don’t affect the current total and keep only the entries needed.
+                     Will remove \(preview.removeCount) and keep \(preview.keepCount).
+                     """)
             }
         }
     }
 
-    // MARK: - Row View
-
+    // MARK: - Row content (themed)
     @ViewBuilder
-    private func historyRow(_ row: DisplayRow) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            // LEFT: Reason + subtitle (time first, then item title)
+    private func historyRowContent(_ row: DisplayRow) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            // LEFT: Primary + subtitle
             VStack(alignment: .leading, spacing: 2) {
-                Text(reasonText(row))
+                Text(reasonText(row))                 // <-- UPDATED: includes task title inline for completed rows
                     .font(.subheadline)
+                    .foregroundStyle(FuturistTheme.textPrimary)
 
-                if let subtitle = subtitleText(row) {
+                if let subtitle = subtitleText(row) { // <-- UPDATED: completed rows now show time only
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(FuturistTheme.textSecondary)
                 }
             }
 
@@ -221,16 +424,14 @@ struct PointsHistoryView: View {
 
             // RIGHT: Delta
             Text(deltaText(row.delta))
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundStyle(row.delta >= 0 ? .green : .red)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(row.delta >= 0 ? Color.green : Color.red)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(reasonText(row)), \(deltaText(row.delta))")
     }
 
     // MARK: - Snapshot detection
-
     private func isSnapshot(_ e: PointsEntry, cutoffDay: Date) -> Bool {
         // Heuristic: compactor creates `.manualAdjust` at cutoff with assignmentId == nil
         return e.reason == .manualAdjust
@@ -240,7 +441,7 @@ struct PointsHistoryView: View {
     }
 
     // MARK: - Reason + subtitle + delta formatting
-
+    /// Primary line (e.g., "Task completed — Brush Teeth")
     private func reasonText(_ row: DisplayRow) -> String {
         if row.isSnapshot { return "Balance carried forward" }
 
@@ -249,30 +450,39 @@ struct PointsHistoryView: View {
             return "Manual adjust"
 
         case .redeemed:
+            // Reward title stays on subtitle (consistent with current design)
             return "Reward claimed"
 
         case .missedPenalty:
             return "Missed task penalty"
 
         case .completed:
-            return row.delta >= 0 ? "Task completed" : "Task un-ticked"
+            // Include task title on primary line when available
+            if let t = row.taskTitle, !t.trimmed.isEmpty {
+                return (row.delta >= 0) ? "Task completed — \(t)" : "Task un-ticked — \(t)"
+            } else {
+                return (row.delta >= 0) ? "Task completed" : "Task un-ticked"
+            }
         }
     }
 
-    /// Subtitle: "{time}  •  {item title (if any)}"
+    /// Subtitle: time (and for rewards, also reward title)
     private func subtitleText(_ row: DisplayRow) -> String? {
-        // No subtitle for snapshot (it is pinned to cutoff)
+        // Snapshot subtitle shows the cutoff date
         if row.isSnapshot { return "as at \(formatDate(row.day))" }
 
         let timeStr = formatTime(row.createdAt)
 
-        // Decide which item title to show (task or reward)
-        if row.reason == .completed, let t = row.taskTitle, !t.trimmed.isEmpty {
-            return "\(timeStr) • \(t)"
+        // Completed rows: we now show the task title on the primary line, so subtitle is just time.
+        if row.reason == .completed {
+            return timeStr
         }
+
+        // Rewards: keep reward title on subtitle (time • title)
         if row.reason == .redeemed, let r = row.rewardTitle, !r.trimmed.isEmpty {
             return "\(timeStr) • \(r)"
         }
+
         // Otherwise just time
         return timeStr
     }
@@ -282,9 +492,7 @@ struct PointsHistoryView: View {
         return "\(sign)\(abs(delta))"
     }
 
-    private func sectionHeader(_ date: Date) -> String {
-        formatDate(date)
-    }
+    private func sectionHeader(_ date: Date) -> String { formatDate(date) }
 
     private func formatDate(_ date: Date) -> String {
         let df = DateFormatter()
@@ -301,7 +509,6 @@ struct PointsHistoryView: View {
     }
 
     // MARK: - Reward title resolver
-
     /// Best-effort match of a `.redeemed` ledger entry to a claimed RewardRequest to display its title.
     /// Matches by same child, absolute delta == approvedCost, and claimedAt within ±rewardMatchWindow of createdAt.
     private func findClaimedRewardTitle(matching entry: PointsEntry) -> String? {
@@ -310,22 +517,34 @@ struct PointsHistoryView: View {
 
         // Candidate claimed requests for this child with same cost
         let candidates = appState.rewardRequests.filter {
-            $0.childId == childId &&
-            ($0.status == .claimed || $0.claimedAt != nil) &&
-            ($0.approvedCost ?? 0) == absCost
+            $0.childId == childId
+            && ($0.status == .claimed || $0.claimedAt != nil)
+            && ($0.approvedCost ?? 0) == absCost
         }
 
-        // Pick the one with closest claimedAt to the ledger entry timestamp within the time window
+        // Pick the one with closest claimedAt within the window
         var best: (req: RewardRequest, diff: TimeInterval)? = nil
         for req in candidates {
             guard let ct = req.claimedAt else { continue }
             let diff = abs(ct.timeIntervalSince(created))
             if diff <= rewardMatchWindow {
-                if best == nil || diff < best!.diff {
-                    best = (req, diff)
-                }
+                if best == nil || diff < best!.diff { best = (req, diff) }
             }
         }
         return best?.req.title
+    }
+
+    // MARK: - Clean action (preview → confirm)
+    private func onTapClean() {
+        let preview = appState.previewCleanChildPointsHistory(childId: childId)
+        cleanPreview = preview
+        if preview.removeCount == 0 {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { showingNothingToCleanToast = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                withAnimation(.easeOut(duration: 0.20)) { showingNothingToCleanToast = false }
+            }
+        } else {
+            showCleanConfirm = true
+        }
     }
 }

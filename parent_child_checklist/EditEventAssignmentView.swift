@@ -213,7 +213,7 @@ private struct InlineGraphicalCalendar: View {
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.06)))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(FuturistTheme.cardStroke, lineWidth: 1))
-            .transition(.opacity.combined(with: .move(edge: .top)))
+            .transition(.opacity .combined(with: .move(edge: .top)))
     }
 }
 
@@ -234,7 +234,7 @@ private struct InlineWheelTimePicker: View {
         }
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.06)))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(FuturistTheme.cardStroke, lineWidth: 1))
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        .transition(.opacity .combined(with: .move(edge: .top)))
     }
 }
 
@@ -355,7 +355,7 @@ struct EditEventAssignmentView: View {
     private func dayOnly(_ date: Date) -> Date { isoCalendar.startOfDay(for: date) }
 
     private var startDatePickerLowerBound: Date {
-        // allow choosing the original past date
+        // allow choosing the original past date as lower bound
         min(dayOnly(Date()), dayOnly(original.startDate))
     }
 
@@ -452,23 +452,20 @@ struct EditEventAssignmentView: View {
         }
     }
 
+    // MARK: - Enforcement (Edit-mode friendly)
     private func enforceNoPastScheduling() {
         let now = Date()
         let today = dayOnly(Date())
 
-        if dayOnly(startDate) < today {
-            startDate = today
-            if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
-                finishDate = startDate
-            }
-            showLocalToast("Start date adjusted to today.")
-        }
+        // ❌ Removed: automatic clamping of past Start Date to today (and its toast).
 
+        // Keep finish date ≥ start date
         if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
             finishDate = startDate
             showLocalToast("Finish date adjusted to match start date.")
         }
 
+        // Same-day time sanity checks (only if not Specified Days)
         let isToday = (dayOnly(startDate) == today)
         if isToday && occurrence != .specifiedDays {
             let nowComps = isoCalendar.dateComponents([.hour, .minute], from: now)
@@ -931,14 +928,27 @@ struct EditEventAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 6) DELETE
+                        // 6) DELETE (High-contrast pill)
                         FrostedCard {
-                            Button(role: .destructive) { showDeleteConfirm = true } label: {
-                                HStack {
-                                    Image(systemName: "trash").font(.body.weight(.semibold))
-                                    Text("Delete Event Assignment").font(.body.weight(.semibold))
+                            Button {
+                                showDeleteConfirm = true
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "trash.fill")
+                                        .font(.body.weight(.semibold))
+                                    Text("Delete Event Assignment")
+                                        .font(.body.weight(.semibold))
                                 }
-                                .frame(maxWidth: .infinity, alignment: .center)
+                                .foregroundStyle(Color.white)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .padding(.vertical, 2) // slight cushion inside the pill
+                                .background(Capsule().fill(FuturistTheme.softRedBase))
+                                .overlay(
+                                    Capsule()
+                                        .stroke(FuturistTheme.softRedLight.opacity(0.95), lineWidth: 1)
+                                )
+                                .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 2)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -960,13 +970,16 @@ struct EditEventAssignmentView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
 
-            // Custom top bar
+            // ✅ Custom top bar with a 12‑pt cushion so pills don’t hug the sheet’s top radius
             .safeAreaInset(edge: .top, spacing: 0) {
-                EditEventTopBar(
-                    canSave: canSave,
-                    onCancel: { dismiss() },
-                    onSave: { if canSave { saveEdits() } }
-                )
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 12) // ← cushion
+                    EditEventTopBar(
+                        canSave: canSave,
+                        onCancel: { dismiss() },
+                        onSave: { if canSave { saveEdits() } }
+                    )
+                }
                 .background(Color.clear)
             }
 
@@ -990,8 +1003,9 @@ struct EditEventAssignmentView: View {
 
             // Segmented control readability (parity with Task screens)
             .onAppear {
-                enforceNoPastScheduling()
-                handlePastTimeOnTodayIfNeeded()
+                // ⛔️ Removed automatic enforcement on appear to avoid altering stored past dates
+                // enforceNoPastScheduling()
+                // handlePastTimeOnTodayIfNeeded()
 
                 prevSegTitleAttrsNormal   = UISegmentedControl.appearance().titleTextAttributes(for: .normal)
                 prevSegTitleAttrsSelected = UISegmentedControl.appearance().titleTextAttributes(for: .selected)

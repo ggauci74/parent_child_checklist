@@ -3,22 +3,21 @@ import UIKit
 
 // MARK: - Futurist theme tokens (shared with Assign Task)
 private enum FuturistTheme {
-    static let skyTop     = Color(red: 0.02, green: 0.06, blue: 0.16)   // deep navy
-    static let skyBottom  = Color(red: 0.01, green: 0.03, blue: 0.10)
-    static let neonAqua   = Color(red: 0.20, green: 0.95, blue: 1.00)   // bright cyan
-
-    static let textPrimary   = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let skyTop = Color(red: 0.02, green: 0.06, blue: 0.16) // deep navy
+    static let skyBottom = Color(red: 0.01, green: 0.03, blue: 0.10)
+    static let neonAqua = Color(red: 0.20, green: 0.95, blue: 1.00) // bright cyan
+    static let textPrimary = Color(red: 0.92, green: 0.97, blue: 1.00)
     static let textSecondary = Color.white.opacity(0.78)
-    static let chipBorder    = Color.white.opacity(0.25)
-    static let chipDisabled  = Color.white.opacity(0.55)
-    static let cardStroke    = Color.white.opacity(0.08)
-    static let divider       = Color.white.opacity(0.10)
-    static let cardShadow    = Color.black.opacity(0.10)
+    static let chipBorder = Color.white.opacity(0.25)
+    static let chipDisabled = Color.white.opacity(0.55)
+    static let cardStroke = Color.white.opacity(0.08)
+    static let divider = Color.white.opacity(0.10)
+    static let cardShadow = Color.black.opacity(0.10)
 
     // Pastel action pill colours
-    static let softRedBase    = Color(red: 1.00, green: 0.36, blue: 0.43)
-    static let softGreenBase  = Color(red: 0.27, green: 0.89, blue: 0.54)
-    static let softRedLight   = Color(red: 1.00, green: 0.58, blue: 0.63)
+    static let softRedBase = Color(red: 1.00, green: 0.36, blue: 0.43)
+    static let softGreenBase = Color(red: 0.27, green: 0.89, blue: 0.54)
+    static let softRedLight = Color(red: 1.00, green: 0.58, blue: 0.63)
     static let softGreenLight = Color(red: 0.62, green: 0.95, blue: 0.73)
 }
 
@@ -26,8 +25,8 @@ private enum FuturistTheme {
 private struct FrostedCard<Content: View>: View {
     let content: Content
     init(@ViewBuilder content: () -> Content) { self.content = content() }
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private var surface: some ShapeStyle {
         reduceTransparency
         ? Color(red: 0.05, green: 0.10, blue: 0.22)
@@ -36,7 +35,7 @@ private struct FrostedCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) { content }
-            .padding(.vertical, 10)     // tightened rhythm to match Task
+            .padding(.vertical, 10) // tightened rhythm to match Task
             .padding(.horizontal, 16)
             .background(surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
@@ -57,7 +56,7 @@ private struct BrightLineSeparator: View {
         LinearGradient(
             gradient: Gradient(stops: [
                 .init(color: FuturistTheme.skyTop.opacity(0.95), location: 0.00),
-                .init(color: FuturistTheme.neonAqua,             location: 0.50),
+                .init(color: FuturistTheme.neonAqua, location: 0.50),
                 .init(color: FuturistTheme.skyTop.opacity(0.95), location: 1.00),
             ]),
             startPoint: .leading,
@@ -68,7 +67,7 @@ private struct BrightLineSeparator: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, leadingInset)
         .padding(.trailing, trailingInset)
-        .padding(.horizontal, 12)   // align with card outer padding
+        .padding(.horizontal, 12) // align with card outer padding
         .zIndex(2)
         .accessibilityHidden(true)
     }
@@ -107,7 +106,6 @@ private struct AssignTopBar: View {
     let canSave: Bool
     let onCancel: () -> Void
     let onSave: () -> Void
-
     private let pillWidth: CGFloat = 76
     private let pillHeight: CGFloat = 32
 
@@ -267,8 +265,8 @@ private struct InlineWheelTimePicker: View {
     }
 }
 
-// MARK: - Assign-To multi-select sheet (same as Task)
-private struct AssignToPickerSheet: View {
+// MARK: - Assign-To (PUSH) destination — same UI as the sheet version
+private struct AssignToPickerScreen: View {
     let allChildren: [ChildProfile]
     let preselected: Set<UUID>
     var onApply: (Set<UUID>) -> Void
@@ -277,46 +275,41 @@ private struct AssignToPickerSheet: View {
     @State private var working: Set<UUID> = []
 
     var body: some View {
-        NavigationStack {
-            List {
-                ForEach(allChildren) { child in
-                    Button {
-                        if working.contains(child.id) { working.remove(child.id) }
-                        else { working.insert(child.id) }
-                    } label: {
-                        HStack(spacing: 12) {
-                            ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 32)
-                            Text(child.name)
-                            Spacer()
-                            Image(systemName: working.contains(child.id) ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(working.contains(child.id) ? Color.accentColor : Color.secondary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .navigationTitle("Choose Children")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItemGroup(placement: .topBarLeading) {
-                    Button("Select All") { working = Set(allChildren.map(\.id)) }
-                    Button("Clear All") { working.removeAll() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        onApply(working)
-                        dismiss()
+        List {
+            ForEach(allChildren) { child in
+                Button {
+                    if working.contains(child.id) { working.remove(child.id) }
+                    else { working.insert(child.id) }
+                } label: {
+                    HStack(spacing: 12) {
+                        ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 32)
+                        Text(child.name)
+                        Spacer()
+                        Image(systemName: working.contains(child.id) ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(working.contains(child.id) ? Color.accentColor : Color.secondary)
                     }
                 }
+                .buttonStyle(.plain)
             }
-            .onAppear { working = preselected }
         }
+        .navigationTitle("Choose Children")
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarLeading) {
+                Button("Select All") { working = Set(allChildren.map(\.id)) }
+                Button("Clear All") { working.removeAll() }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") {
+                    onApply(working)
+                    dismiss()
+                }
+            }
+        }
+        .onAppear { working = preselected }
     }
 }
 
-// MARK: - Assign Event View (full parity with Assign Task)
+// MARK: - Assign Event View (updated: Location uses PUSH navigation)
 struct AssignEventToChildView: View {
     // Inputs
     let childId: UUID
@@ -333,32 +326,31 @@ struct AssignEventToChildView: View {
     @State private var selectedTemplate: EventTemplate? = nil
     @State private var showSelectEvent = false
 
+    // Helper (collapsible)
     @State private var helperText: String = ""
     @State private var showHelperEditor: Bool = false
+
+    // Active toggle (shown only after selection)
     @State private var isActive: Bool = true
 
     // Location
     @State private var selectedLocationId: UUID? = nil
     @State private var selectedLocationNameSnapshot: String = ""
-    @State private var showLocationPicker = false
 
-    // Dates
+    // DATES / OCCURRENCE / TIMES state
     @State private var startDate: Date
     @State private var finishDateEnabled: Bool = false
     @State private var finishDate: Date
 
-    // Occurrence
     @State private var occurrence: EventAssignment.Occurrence = .specifiedDays
     @State private var selectedWeekdays: Set<Int> = [0,1,2,3,4,5,6]
     private let weekdayLabels = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
-    // Inline picker toggles
     @State private var showStartDateInline: Bool = false
     @State private var showFinishDateInline: Bool = false
     @State private var showStartTimeInline: Bool = false
     @State private var showFinishTimeInline: Bool = false
 
-    // Times
     @State private var startTimeEnabled: Bool = false
     @State private var startTime: Date
     @State private var finishTimeEnabled: Bool = false
@@ -375,42 +367,41 @@ struct AssignEventToChildView: View {
     @State private var finishNotifyEnabled: Bool = false
     @State private var finishNotifyRecipient: NotifyRecipient = .both
     @State private var finishNotifyOffsetMinutes: Int = 0
-
     private let notifyOffsetOptions: [(label: String, minutes: Int)] = [
         ("At time", 0), ("5 min before", 5), ("10 min before", 10),
         ("15 min before", 15), ("30 min before", 30),
         ("1 hour before", 60), ("2 hours before", 120)
     ]
 
-    // Toast
+    // Toast / info
     @State private var localToastMessage: String? = nil
     @State private var lastClampToastAt: Date = .distantPast
-
-    // Inline hint for Option‑B (bump to tomorrow)
     @State private var skipTodayInfo: String? = nil
 
-    // Assign‑To picker sheet
-    @State private var showAssignToPicker: Bool = false
+    // PUSH navigation flags
+    @State private var goToChooseChildren: Bool = false
+    @State private var goToChooseLocation: Bool = false
+
+    // ⬇️ NEW: Backups for segmented control appearance (scoped to this screen)
+    @State private var prevSegTitleAttrsNormal: [NSAttributedString.Key: Any]?
+    @State private var prevSegTitleAttrsSelected: [NSAttributedString.Key: Any]?
+    @State private var prevSelectedTintColor: UIColor?
 
     // MARK: - Init
     init(childId: UUID, defaultStartDate: Date, onShowWeeklyToast: ((String) -> Void)? = nil) {
         self.childId = childId
         self.defaultStartDate = defaultStartDate
         self.onShowWeeklyToast = onShowWeeklyToast
-
         _selectedChildIds = State(initialValue: [childId])
-        _startDate        = State(initialValue: defaultStartDate)
-        _finishDate       = State(initialValue: defaultStartDate)
-
+        _startDate = State(initialValue: defaultStartDate)
+        _finishDate = State(initialValue: defaultStartDate)
         let now = Date()
-        _startTime        = State(initialValue: now)
-        _finishTime       = State(initialValue: now)
+        _startTime = State(initialValue: now)
+        _finishTime = State(initialValue: now)
     }
 
-    // MARK: - Derived
+    // MARK: - Derived helpers
     private var canSave: Bool { selectedTemplate != nil && !selectedChildIds.isEmpty }
-
-    // Calendars & helpers
     private var isoCalendar: Calendar {
         var cal = Calendar(identifier: .iso8601)
         cal.timeZone = .current
@@ -428,15 +419,7 @@ struct AssignEventToChildView: View {
     }
     private func weekdayIndexMondayFirst(for date: Date) -> Int {
         let wd = isoCalendar.component(.weekday, from: date) // 1=Sun ... 7=Sat
-        switch wd {
-        case 2: return 0 // Mon
-        case 3: return 1 // Tue
-        case 4: return 2 // Wed
-        case 5: return 3 // Thu
-        case 6: return 4 // Fri
-        case 7: return 5 // Sat
-        default: return 6 // Sun
-        }
+        switch wd { case 2: return 0; case 3: return 1; case 4: return 2; case 5: return 3; case 6: return 4; case 7: return 5; default: return 6 }
     }
     private func isTodaySelectedWeekday() -> Bool {
         selectedWeekdays.contains(weekdayIndexMondayFirst(for: startDate))
@@ -445,9 +428,7 @@ struct AssignEventToChildView: View {
 
     // MARK: - Toast helpers
     private func showLocalToast(_ message: String) {
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-            localToastMessage = message
-        }
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) { localToastMessage = message }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             withAnimation(.easeOut(duration: 0.2)) { localToastMessage = nil }
         }
@@ -459,7 +440,7 @@ struct AssignEventToChildView: View {
         showLocalToast(message)
     }
 
-    // MARK: - Option‑B handling for past start time today on Specified Days
+    // MARK: - Option‑B handling (recurring; past start time today → bump)
     private func handlePastTimeOnTodayIfNeeded() {
         guard occurrence == .specifiedDays else { skipTodayInfo = nil; return }
         let today = todayDay
@@ -468,7 +449,7 @@ struct AssignEventToChildView: View {
         guard startTimeEnabled else { skipTodayInfo = nil; return }
 
         let nowKey = timeKey(Date()) ?? 0
-        let sKey   = timeKey(startTime) ?? Int.max
+        let sKey = timeKey(startTime) ?? Int.max
         guard sKey < nowKey else { skipTodayInfo = nil; return }
 
         if let next = isoCalendar.date(byAdding: .day, value: 1, to: startDate) {
@@ -547,6 +528,7 @@ struct AssignEventToChildView: View {
         }
         return set
     }
+
     private func allowedHintText(for allowed: Set<Int>) -> String {
         guard finishDateEnabled else { return "Applies on selected weekdays." }
         if allowed.count == 1 {
@@ -560,14 +542,13 @@ struct AssignEventToChildView: View {
         }
     }
 
-    // MARK: - ✅ Missing helper (added): keep selected weekdays within allowed range
+    // Keep selected weekdays within allowed range
     private func reconcileSelectedWeekdaysWithAllowed() {
         guard occurrence == .specifiedDays else { return }
         let allowed = allowedWeekdays
         guard !allowed.isEmpty else { return }
-
         let before = selectedWeekdays
-        let after  = before.intersection(allowed)
+        let after = before.intersection(allowed)
         if after != before {
             selectedWeekdays = after
             let removed = before.subtracting(after).sorted()
@@ -578,45 +559,36 @@ struct AssignEventToChildView: View {
         }
     }
 
-    // MARK: - Duplicate detection (ignore duration now)
+    // Duplicate detection (ignore duration)
     private func isExactDuplicateEvent(_ proposed: EventAssignment) -> Bool {
         appState.eventAssignments.contains { existing in
             guard existing.childId == proposed.childId else { return false }
             guard existing.templateId == proposed.templateId else { return false }
-
             // Snapshot identity
             guard existing.eventTitle == proposed.eventTitle else { return false }
             guard existing.eventIcon == proposed.eventIcon else { return false }
             guard normalizedOptionalString(existing.helper) == normalizedOptionalString(proposed.helper) else { return false }
             guard existing.isActive == proposed.isActive else { return false }
-
             // Schedule identity
             guard dayOnly(existing.startDate) == dayOnly(proposed.startDate) else { return false }
             guard existing.endDate.map(dayOnly) == proposed.endDate.map(dayOnly) else { return false }
             guard existing.occurrence == proposed.occurrence else { return false }
             guard existing.weekdays.sorted() == proposed.weekdays.sorted() else { return false }
-
             // Time identity
             guard timeKey(existing.startTime) == timeKey(proposed.startTime) else { return false }
             guard timeKey(existing.finishTime) == timeKey(proposed.finishTime) else { return false }
-
-            // ❌ Duration no longer considered
-            // guard existing.durationMinutes == proposed.durationMinutes else { return false }
-
             // Location + alerts + notify identity
             guard existing.locationId == proposed.locationId else { return false }
             guard existing.locationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
-                  == proposed.locationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+                    == proposed.locationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
             guard existing.alertMe == proposed.alertMe else { return false }
             guard existing.alertOffsetMinutes == proposed.alertOffsetMinutes else { return false }
-
             guard existing.startNotifyEnabled == proposed.startNotifyEnabled else { return false }
             guard existing.startNotifyRecipient == proposed.startNotifyRecipient else { return false }
             guard existing.startNotifyOffsetMinutes == proposed.startNotifyOffsetMinutes else { return false }
             guard existing.finishNotifyEnabled == proposed.finishNotifyEnabled else { return false }
             guard existing.finishNotifyRecipient == proposed.finishNotifyRecipient else { return false }
             guard existing.finishNotifyOffsetMinutes == proposed.finishNotifyOffsetMinutes else { return false }
-
             return true
         }
     }
@@ -660,8 +632,7 @@ struct AssignEventToChildView: View {
 
                 ScrollView {
                     VStack(spacing: 0) {
-
-                        // 1) EVENT CARD (name/template, helper, active)
+                        // 1) EVENT CARD — order: Select Event → Active → Add helper note
                         FrostedCard {
                             Button {
                                 showSelectEvent = true
@@ -669,6 +640,7 @@ struct AssignEventToChildView: View {
                                 HStack(alignment: .top, spacing: 12) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         if let tpl = selectedTemplate {
+                                            // Selected state (emoji + title + helper line)
                                             HStack(spacing: 10) {
                                                 TaskEmojiIconView(icon: tpl.iconSymbol, size: 22)
                                                 Text(tpl.title)
@@ -679,10 +651,11 @@ struct AssignEventToChildView: View {
                                                 .font(.footnote)
                                                 .foregroundStyle(FuturistTheme.textSecondary)
                                         } else {
-                                            Text("Event Name")
+                                            // Empty state — “Select Event” to match Assign Task
+                                            Text("Select Event")
                                                 .font(.headline)
                                                 .foregroundStyle(FuturistTheme.textPrimary)
-                                            Text("Select Event")
+                                            Text("Tap to choose an event")
                                                 .font(.footnote)
                                                 .foregroundStyle(FuturistTheme.textSecondary)
                                         }
@@ -696,7 +669,12 @@ struct AssignEventToChildView: View {
                             .buttonStyle(.plain)
                             .accessibilityHint("Opens event templates")
 
-                            // Collapsible Helper
+                            // ✅ Active toggle — ONLY visible once an event is chosen
+                            if selectedTemplate != nil {
+                                ToggleRow(title: "Active", isOn: $isActive, titleColor: FuturistTheme.textSecondary)
+                            }
+
+                            // Helper collapsible — AFTER Active (parity with Assign Task)
                             VStack(alignment: .leading, spacing: 8) {
                                 Button {
                                     withAnimation(.easeInOut(duration: 0.18)) { showHelperEditor.toggle() }
@@ -734,18 +712,14 @@ struct AssignEventToChildView: View {
                                     }
                                 }
                             }
-
-                            ToggleRow(title: "Active", isOn: $isActive, titleColor: FuturistTheme.textSecondary)
                         }
                         .padding(.horizontal, 12)
 
                         BrightLineSeparator()
 
-                        // 2) ASSIGN TO (summary row → sheet)
+                        // 2) ASSIGN TO — PUSH (left→right)
                         FrostedCard {
-                            Button {
-                                showAssignToPicker = true
-                            } label: {
+                            Button { goToChooseChildren = true } label: {
                                 HStack {
                                     Text("Assign To").foregroundStyle(FuturistTheme.textPrimary)
                                     Spacer()
@@ -760,11 +734,9 @@ struct AssignEventToChildView: View {
 
                         BrightLineSeparator()
 
-                        // 3) LOCATION (Optional) → uses your existing picker/create flow
+                        // 3) LOCATION (Optional) — NOW PUSH (left→right)
                         FrostedCard {
-                            Button {
-                                showLocationPicker = true
-                            } label: {
+                            Button { goToChooseLocation = true } label: {
                                 HStack {
                                     Text("Location (Optional)").foregroundStyle(FuturistTheme.textPrimary)
                                     Spacer()
@@ -889,7 +861,7 @@ struct AssignEventToChildView: View {
 
                         BrightLineSeparator()
 
-                        // 6) TIME (inline wheels + notify; remains open until tapped again)
+                        // 6) TIME (inline wheels + notify)
                         FrostedCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 // START TIME
@@ -1029,7 +1001,7 @@ struct AssignEventToChildView: View {
                         .zIndex(10)
                 }
             }
-            // Hide system nav bar; we draw our own header
+            // Hide system nav bar; draw own header
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
 
@@ -1047,13 +1019,43 @@ struct AssignEventToChildView: View {
                 )
                 .background(Color.clear)
             }
-
             .onAppear {
                 enforceNoPastScheduling()
                 handlePastTimeOnTodayIfNeeded()
+
+                // ⬇️ NEW: Scoped UISegmentedControl styling for higher-contrast unselected labels
+                prevSegTitleAttrsNormal  = UISegmentedControl.appearance().titleTextAttributes(for: .normal)
+                prevSegTitleAttrsSelected = UISegmentedControl.appearance().titleTextAttributes(for: .selected)
+                prevSelectedTintColor     = UISegmentedControl.appearance().selectedSegmentTintColor
+
+                // Selected segment: dark text on white pill (semibold)
+                let selectedTitleAttrs: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: UIColor(Color(red: 0.08, green: 0.14, blue: 0.24)),
+                    .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
+                ]
+                // Unselected segment: brighter text (~96% white), semibold for legibility
+                let normalTitleAttrs: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: UIColor(FuturistTheme.textPrimary.opacity(0.96)),
+                    .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
+                ]
+                UISegmentedControl.appearance().setTitleTextAttributes(normalTitleAttrs, for: .normal)
+                UISegmentedControl.appearance().setTitleTextAttributes(selectedTitleAttrs, for: .selected)
+                UISegmentedControl.appearance().selectedSegmentTintColor = .white
+            }
+            .onDisappear {
+                // Restore prior segmented control appearance
+                if let prev = prevSegTitleAttrsNormal {
+                    UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .normal)
+                }
+                if let prev = prevSegTitleAttrsSelected {
+                    UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .selected)
+                }
+                if let prev = prevSelectedTintColor {
+                    UISegmentedControl.appearance().selectedSegmentTintColor = prev
+                }
             }
 
-            // Destinations / Sheets
+            // Destinations / PUSH routes
             .navigationDestination(isPresented: $showSelectEvent) {
                 SelectEventTemplateView(
                     selectedTemplateId: selectedTemplate?.id,
@@ -1061,21 +1063,21 @@ struct AssignEventToChildView: View {
                 )
                 .environmentObject(appState)
             }
-            .sheet(isPresented: $showAssignToPicker) {
-                AssignToPickerSheet(
+            .navigationDestination(isPresented: $goToChooseChildren) {
+                AssignToPickerScreen(
                     allChildren: appState.children,
                     preselected: selectedChildIds,
                     onApply: { newSelection in selectedChildIds = newSelection }
                 )
             }
-            .sheet(isPresented: $showLocationPicker) {
-                NavigationStack {
-                    SelectLocationView(
-                        selectedLocationId: $selectedLocationId,
-                        selectedLocationNameSnapshot: $selectedLocationNameSnapshot
-                    )
-                    .environmentObject(appState)
-                }
+            .navigationDestination(isPresented: $goToChooseLocation) {
+                // SelectLocationView already contains its own NavigationStack internally.
+                // We can present it directly; its internal dismiss() will pop this push.
+                SelectLocationView(
+                    selectedLocationId: $selectedLocationId,
+                    selectedLocationNameSnapshot: $selectedLocationNameSnapshot
+                )
+                .environmentObject(appState)
             }
         }
     }
@@ -1114,7 +1116,6 @@ struct AssignEventToChildView: View {
     // MARK: - Save (durationMinutes = nil; notify persisted; schedule notifications)
     private func saveAssignment() {
         enforceNoPastScheduling()
-
         guard let tpl = selectedTemplate else { return }
         guard !selectedChildIds.isEmpty else { return }
 
@@ -1132,7 +1133,7 @@ struct AssignEventToChildView: View {
         let durationValue: Int? = nil
 
         // Notify (persist only if enabled)
-        let persistedStartOffset: Int?  = startNotifyEnabled  ? max(0, startNotifyOffsetMinutes)  : nil
+        let persistedStartOffset: Int? = startNotifyEnabled ? max(0, startNotifyOffsetMinutes) : nil
         let persistedFinishOffset: Int? = finishNotifyEnabled ? max(0, finishNotifyOffsetMinutes) : nil
 
         var skippedNames: [String] = []

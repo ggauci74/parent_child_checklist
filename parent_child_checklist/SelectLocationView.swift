@@ -735,7 +735,7 @@ struct SelectLocationView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
 
-            // Custom top bar (Close / title / Add)
+            // Custom top bar (Close / title / Add → "+")
             .safeAreaInset(edge: .top, spacing: 0) {
                 ZStack {
                     Text("Select Location")
@@ -760,8 +760,9 @@ struct SelectLocationView: View {
 
                         Spacer(minLength: 12)
 
-                        Text("Add")
-                            .font(.subheadline.weight(.semibold))
+                        // ✅ CHANGED: "Add" → "+"
+                        Text("+")
+                            .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(Color.black.opacity(0.9))
                             .frame(width: pillWidth, height: pillHeight)
                             .background(Capsule().fill(FuturistTheme.softGreenLight))

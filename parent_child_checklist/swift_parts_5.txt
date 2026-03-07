@@ -1,378 +1,4 @@
-.move(edge: .top).combined(with: .opacity))
-                        .zIndex(10) // ✅ SwiftUI uses .zIndex(_:)
-                }
-            }
-        }
-    }
-
-    // MARK: - Sections / Subviews
-
-    private var balancesSection: some View {
-        Section("Balances") {
-            if appState.children.isEmpty {
-                Text("No children yet.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(appState.children.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })) { child in
-                    balanceRow(for: child)
-                }
-            }
-        }
-    }
-
-    private var filtersHeader: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 10) {
-                // Status segmented control with counts
-                Picker("Status", selection: $selectedStatus) {
-                    Text("Pending (\(pendingCount))").tag(StatusScope.pending)
-                    Text("Approved (\(approvedCount))").tag(StatusScope.approved)
-                    Text("Claimed (\(claimedCount))").tag(StatusScope.claimed)
-                }
-                .pickerStyle(.segmented)
-
-                // Child filter (compact)
-                HStack(spacing: 10) {
-                    Text("Child")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Picker("Child", selection: Binding(
-                        get: { selectedChildId ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000") ?? UUID() },
-                        set: { newValue in
-                            // special sentinel UUID = All Children
-                            if newValue.uuidString == "00000000-0000-0000-0000-000000000000" {
-                                selectedChildId = nil
-                            } else {
-                                selectedChildId = newValue
-                            }
-                        })) {
-                        Text("All Children").tag(UUID(uuidString: "00000000-0000-0000-0000-000000000000") ?? UUID())
-                        ForEach(appState.children) { child in
-                            Text(child.name).tag(child.id)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                }
-            }
-            .textCase(nil)
-        }
-    }
-
-    private var emptyStateText: String {
-        let base = "\(selectedStatus.rawValue) requests"
-        if let cid = selectedChildId, !childName(cid).isEmpty {
-            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return "No \(base.lowercased()) for \(childName(cid))."
-            } else {
-                return "No \(base.lowercased()) for \(childName(cid)) matching “\(searchText)”."
-            }
-        } else {
-            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return "No \(base.lowercased()) to display."
-            } else {
-                return "No \(base.lowercased()) matching “\(searchText)”."
-            }
-        }
-    }
-
-    private func childHeaderText(_ child: ChildProfile?) -> String {
-        child?.name ?? "Child"
-    }
-
-    private func childName(_ id: UUID) -> String {
-        appState.children.first(where: { $0.id == id })?.name ?? "Child"
-    }
-
-    // MARK: - Balances row
-    @ViewBuilder
-    private func balanceRow(for child: ChildProfile) -> some View {
-        let total = appState.childPointsTotal(childId: child.id)
-        HStack(spacing: 12) {
-            // Child name
-            Text(child.name)
-                .font(.headline)
-            Spacer()
-            // Current balance
-            HStack(spacing: 6) {
-                Text("💎")
-                Text("\(total)")
-                    .fontWeight(.semibold)
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-
-            // Minus
-            Button {
-                let ok = appState.adjustChildPoints(childId: child.id, delta: -1)
-                if !ok { showToast("Balance can’t go below 0.") }
-            } label: {
-                Image(systemName: "minus.circle.fill")
-                    .font(.title3)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.red)
-
-            // Plus
-            Button {
-                _ = appState.adjustChildPoints(childId: child.id, delta: +1)
-            } label: {
-                Image(systemName: "plus.circle.fill")
-                    .font(.title3)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-
-            // History
-            Button {
-                historyChild = child
-            } label: {
-                Label("History", systemImage: "clock.arrow.circlepath")
-                    .labelStyle(.iconOnly)
-                    .font(.title3)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("History for \(child.name)")
-        }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(child.name), \(total) gems")
-    }
-
-    // MARK: - Request row
-    @ViewBuilder
-    private func buttonRow(for req: RewardRequest) -> some View {
-        Button { selected = req } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(childName(req.childId))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    statusPill(req.status)
-                }
-                Text(req.title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-
-                Text(statusDateLine(for: req))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-
-                if let cost = req.approvedCost, cost > 0,
-                   (req.status == .approved || req.status == .claimed) {
-                    HStack(spacing: 4) {
-                        Text("💎")
-                        Text("\(cost)").fontWeight(.semibold)
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button(role: .destructive) {
-                _ = appState.deleteRewardRequest(id: req.id)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
-    }
-
-    private func statusDateLine(for req: RewardRequest) -> String {
-        let df = DateFormatter()
-        df.dateStyle = .medium
-        df.timeStyle = .none
-        switch req.status {
-        case .claimed:
-            if let d = req.claimedAt { return "Claimed on \(df.string(from: d))" }
-            if let d = req.approvedAt { return "Approved on \(df.string(from: d))" }
-            if let d = req.notApprovedAt { return "Not this time on \(df.string(from: d))" }
-            return "Requested on \(df.string(from: req.requestedAt))"
-        case .approved:
-            if let d = req.approvedAt { return "Approved on \(df.string(from: d))" }
-            return "Requested on \(df.string(from: req.requestedAt))"
-        case .notApproved:
-            if let d = req.notApprovedAt { return "Not this time on \(df.string(from: d))" }
-            return "Requested on \(df.string(from: req.requestedAt))"
-        case .pending:
-            return "Requested on \(df.string(from: req.requestedAt))"
-        }
-    }
-
-    private func statusPill(_ status: RewardRequestStatus) -> some View {
-        let text = status.childDisplay
-        let bg: Color
-        let fg: Color
-        switch status {
-        case .pending:
-            bg = Color.yellow.opacity(0.18); fg = .orange
-        case .approved:
-            bg = Color.green.opacity(0.18); fg = .green
-        case .notApproved:
-            bg = Color.gray.opacity(0.20); fg = .secondary
-        case .claimed:
-            bg = Color.blue.opacity(0.18); fg = .blue
-        }
-        return Text(text)
-            .font(.caption2)
-            .fontWeight(.semibold)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .foregroundStyle(fg)
-            .background(bg, in: Capsule())
-    }
-
-    private func showToast(_ message: String) {
-        let now = Date()
-        guard now.timeIntervalSince(lastToastAt) > 0.8 else { return } // rate-limit
-        lastToastAt = now
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-            localToastMessage = message
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation(.easeOut(duration: 0.2)) {
-                localToastMessage = nil
-            }
-        }
-    }
-
-    @State private var showNotApprovedSheet = false
-}
-
-// MARK: - “Not this time” quick view (optional sheet for completeness)
-private struct NotApprovedListView: View {
-    let requests: [RewardRequest]
-    let childName: (UUID) -> String
-    let onOpen: (RewardRequest) -> Void
-    let onDelete: (RewardRequest) -> Void
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if requests.isEmpty {
-                    Section {
-                        Text("No items.")
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    // group by child
-                    let dict = Dictionary(grouping: requests, by: { $0.childId })
-                    let keys = dict.keys.sorted { childName($0).localizedCaseInsensitiveCompare(childName($1)) == .orderedAscending }
-                    ForEach(keys, id: \.self) { cid in
-                        Section(header: Text(childName(cid))) {
-                            ForEach(dict[cid] ?? []) { req in
-                                Button { onOpen(req) } label: {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text(req.title).font(.headline)
-                                        Text(dateLine(req))
-                                            .font(.footnote)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .padding(.vertical, 6)
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu {
-                                    Button(role: .destructive) {
-                                        onDelete(req)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Not this time")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-    }
-
-    private func dateLine(_ req: RewardRequest) -> String {
-        let df = DateFormatter()
-        df.dateStyle = .medium
-        df.timeStyle = .none
-        if let d = req.notApprovedAt { return "Marked on \(df.string(from: d))" }
-        return "Requested on \(df.string(from: req.requestedAt))"
-    }
-}
-
-
-===== ./FamilyDataStore.swift =====
-
-//
-//  FamilyDataStore.swift
-//  parent_child_checklist
-//
-//  Created by George Gauci on 10/2/2026.
-//
-
-import Foundation
-import CloudKit
-
-/// Loads the family's data from CloudKit into a single snapshot that AppState can apply.
-/// This class does **read-only** work; write/autosave will be added later.
-@MainActor
-final class FamilyDataStore {
-
-    // MARK: Snapshot
-
-    struct Snapshot {
-        var children: [ChildProfile] = []
-        var taskTemplates: [TaskTemplate] = []
-        var taskAssignments: [TaskAssignment] = []
-        var taskCompletions: [TaskCompletionRecord] = []
-        var customEmojis: [String] = []
-        var eventTemplates: [EventTemplate] = []
-        var eventAssignments: [EventAssignment] = []
-        var locations: [LocationItem] = []
-    }
-
-    // MARK: Dependencies
-
-    private let ck: CloudKitService
-    private let coordinator: FamilyCoordinator
-
-    init(containerIdentifier: String? = nil) {
-        self.ck = CloudKitService(config: .init(containerIdentifier: containerIdentifier))
-        self.coordinator = FamilyCoordinator(ck: ck)
-    }
-
-    // MARK: Load
-
-    /// Bootstraps the family (shared → private → create) and loads every record type from the FamilyZone.
-    /// If the zone exists but is empty (first run), returns an empty snapshot.
-    func loadSnapshot() async throws -> Snapshot {
-        // Determine which DB/zone we should read from.
-        let state = try await coordinator.bootstrapFamily()
-
-        let context: FamilyCoordinator.FamilyContext
-        switch state {
-        case .shared(let ctx):        context = ctx
-        case .privateOwner(let ctx):  context = ctx
-        }
-
-        let db = context.database
-        let zoneID = context.zoneID
-
-        // Kick off all fetches in parallel.
-        async let childrenR         = ck.fetchAll(recordType: CKSchema.RecordType.childProfile,     zoneID: zoneID, from: db)
-        async let templatesR        = ck.fetchAll(recordType: CKSchema.RecordType.taskTemplate,     zoneID: zoneID, from: db)
-        async let assignmentsR      = ck.fetchAll(recordType: CKSchema.RecordType.taskAssignment,   zoneID: zoneID, from: db)
-        async let completionsR      = ck.fetchAll(recordType: CKSchema.RecordType.taskCompletion,   zoneID: zoneID, from: db)
-
-        async let eventTemplatesR   = ck.fetchAll(recordType: CKSchema.RecordType.eventTemplate,    zoneID: zoneID, from: db)
-        async let eventAssignmentsR = ck.fetchAll(recordType: CKSchema.RecordType.eventAssignment,  zoneID: zoneID, from: db)
-        async let locationsR        = ck.fetchAll(recordType: CKSchema.RecordType.locationItem,     zoneID: zoneID, from: db)
-
-        // Emoji library is a singleton record
-        async let emojiRecord       = ck.fetchFirst(recordType: CKSchema.RecordType.emojiLibrary,   zoneID: zoneID, from: db)
+       = ck.fetchFirst(recordType: CKSchema.RecordType.emojiLibrary,   zoneID: zoneID, from: db)
 
         // Await and map per type.
         let children         = try await childrenR.compactMap(ChildProfileMapper.fromRecord)
@@ -1598,6 +1224,7 @@ struct EditTaskAssignmentView: View {
     }
     private func dayOnly(_ d: Date) -> Date { isoCalendar.startOfDay(for: d) }
     private var startDatePickerLowerBound: Date {
+        // Allow selecting back to the original stored start date (even if it is in the past)
         min(dayOnly(Date()), dayOnly(original.startDate))
     }
     private func showLocalToast(_ message: String) {
@@ -1653,19 +1280,16 @@ struct EditTaskAssignmentView: View {
         let now = Date()
         let today = dayOnly(Date())
 
-        if dayOnly(startDate) < today {
-            startDate = today
-            if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
-                finishDate = startDate
-            }
-            clampToast("Start date adjusted to today.")
-        }
+        // ❌ Removed: automatic clamping of past Start Date to today (and its toast).
+        // We preserve the original start date in Edit mode.
 
+        // Keep finish date ≥ start date (and show a helpful toast if we auto-correct).
         if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
             finishDate = startDate
             clampToast("Finish date adjusted to match start date.")
         }
 
+        // Same-day time sanity checks (only if not Specified Days)
         let isToday = (dayOnly(startDate) == today)
         if isToday && occurrence != .specifiedDays {
             let nowComps = isoCalendar.dateComponents([.hour, .minute], from: now)
@@ -1790,4 +1414,327 @@ struct EditTaskAssignmentView: View {
         if updated.isActive {
             NotificationManager.shared.scheduleNext(for: updated, audience: currentAudience())
         } else {
-            Noti
+            NotificationManager.shared.cancelAllForTask(id: updated.id)
+        }
+
+        dismiss()
+    }
+    private func currentAudience() -> NotificationAudience { .parent }
+
+    // MARK: - Points row
+    @ViewBuilder
+    private func pointsStepperRow() -> some View {
+        HStack(spacing: 12) {
+            Text("💎 Points").foregroundStyle(FuturistTheme.textPrimary)
+            Spacer(minLength: 8)
+
+            Button { rewardPoints = max(0, rewardPoints - 1) } label: {
+                Image(systemName: "minus.circle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.neonAqua)
+                    .shadow(color: FuturistTheme.neonAqua.opacity(0.35), radius: 2)
+            }
+            .buttonStyle(.plain)
+            .disabled(rewardPoints == 0)
+            .opacity(rewardPoints == 0 ? 0.6 : 1.0)
+
+            Text("\(rewardPoints)")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(FuturistTheme.textPrimary)
+                .frame(minWidth: 32, alignment: .center)
+
+            Button { rewardPoints += 1 } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.neonAqua)
+                    .shadow(color: FuturistTheme.neonAqua.opacity(0.35), radius: 2)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutPriority(1)
+    }
+
+    // MARK: - Weekday chip
+    @ViewBuilder
+    private func weekdayChipCompact(index: Int, label: String, isSelected: Bool, isAllowed: Bool) -> some View {
+        let borderColor: Color = {
+            if !isAllowed { return FuturistTheme.cardStroke }
+            return isSelected ? FuturistTheme.neonAqua : FuturistTheme.chipBorder
+        }()
+        let textColor: Color = {
+            if !isAllowed { return FuturistTheme.chipDisabled }
+            return FuturistTheme.textPrimary
+        }()
+        let fill: Color = isSelected ? FuturistTheme.neonAqua.opacity(0.18) : .clear
+
+        Text(label)
+            .font(.caption2).fontWeight(.semibold)
+            .foregroundStyle(textColor)
+            .frame(minWidth: 34, minHeight: 24)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(fill))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(borderColor, lineWidth: isSelected ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard isAllowed else { return }
+                if isSelected { selectedWeekdays.remove(index) } else { selectedWeekdays.insert(index) }
+            }
+    }
+
+    // MARK: - Body
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                CurvyAquaBlueBackground(animate: true)
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 0) {
+
+                        // 1) TASK
+                        FrostedCard {
+                            Button { showSelectTask = true } label: {
+                                HStack(alignment: .top, spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        let tpl = selectedTemplate
+                                        if let tpl {
+                                            HStack(spacing: 10) {
+                                                TaskEmojiIconView(icon: tpl.iconSymbol, size: 22)
+                                                Text(tpl.title)
+                                                    .font(.headline)
+                                                    .foregroundStyle(FuturistTheme.textPrimary)
+                                            }
+                                            Text("Tap to change")
+                                                .font(.footnote)
+                                                .foregroundStyle(FuturistTheme.textSecondary)
+                                        } else {
+                                            HStack(spacing: 10) {
+                                                TaskEmojiIconView(icon: original.taskIcon, size: 22)
+                                                Text(original.taskTitle)
+                                                    .font(.headline)
+                                                    .foregroundStyle(FuturistTheme.textPrimary)
+                                            }
+                                            Text("Tap to change")
+                                                .font(.footnote)
+                                                .foregroundStyle(FuturistTheme.textSecondary)
+                                        }
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                        .padding(.top, 2)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Opens task templates")
+
+                            // Collapsible helper
+                            VStack(alignment: .leading, spacing: 8) {
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.18)) { showHelperEditor.toggle() }
+                                } label: {
+                                    HStack {
+                                        if helperText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                            Text("Add helper note").foregroundStyle(FuturistTheme.textSecondary)
+                                        } else {
+                                            Text("Helper note").foregroundStyle(FuturistTheme.textPrimary)
+                                            Spacer()
+                                            Text(helperText)
+                                                .lineLimit(1)
+                                                .foregroundStyle(FuturistTheme.textSecondary)
+                                        }
+                                        Spacer()
+                                        Image(systemName: showHelperEditor ? "chevron.up" : "chevron.down")
+                                            .foregroundStyle(FuturistTheme.textSecondary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+
+                                if showHelperEditor {
+                                    TextField("Type helper text...", text: $helperText, axis: .vertical)
+                                        .lineLimit(4, reservesSpace: true)
+                                        .textInputAutocapitalization(.sentences)
+                                        .submitLabel(.done)
+                                        .foregroundStyle(FuturistTheme.textPrimary)
+                                    HStack {
+                                        Spacer()
+                                        if !helperText.isEmpty {
+                                            Button("Clear") { helperText.removeAll() }
+                                                .font(.footnote)
+                                                .foregroundStyle(FuturistTheme.textSecondary)
+                                        }
+                                    }
+                                }
+                            }
+
+                            ToggleRow(title: "Active", isOn: $isActive, titleColor: FuturistTheme.textSecondary)
+                        }
+                        .padding(.horizontal, 12)
+
+                        BrightLineSeparator()
+
+                        // 2) REWARD POINTS
+                        FrostedCard {
+                            ViewThatFits(in: .horizontal) {
+                                HStack(alignment: .center, spacing: 12) {
+                                    pointsStepperRow()
+                                    Rectangle().fill(FuturistTheme.divider)
+                                        .frame(width: 1, height: 24)
+                                        .accessibilityHidden(true)
+                                    ToggleRow(title: "Subtract points if not completed", isOn: $subtractIfNotCompleted)
+                                }
+                                VStack(alignment: .leading, spacing: 8) {
+                                    pointsStepperRow()
+                                    ToggleRow(title: "Subtract points if not completed", isOn: $subtractIfNotCompleted)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
+
+                        BrightLineSeparator()
+
+                        // 3) DATES (inline graphical)
+                        FrostedCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        showStartDateInline.toggle()
+                                        if showStartDateInline {
+                                            showFinishDateInline = false
+                                            showStartTimeInline = false
+                                            showFinishTimeInline = false
+                                        }
+                                    }
+                                } label: {
+                                    HStack {
+                                        Text("Start Date").foregroundStyle(FuturistTheme.textPrimary)
+                                        Spacer()
+                                        ValueChip(text: dateString(startDate))
+                                    }
+                                }
+                                .buttonStyle(.plain)
+
+                                if showStartDateInline {
+                                    InlineGraphicalCalendar(label: "Start Date", date: $startDate, range: startDatePickerLowerBound...)
+                                        .onChange(of: startDate) { _, _ in enforceNoPastScheduling() }
+                                }
+
+                                ToggleRow(title: "Finish Date", isOn: $finishDateEnabled)
+                                    .onChange(of: finishDateEnabled) { _, enabled in
+                                        if !enabled {
+                                            withAnimation(.easeInOut(duration: 0.18)) { showFinishDateInline = false }
+                                        }
+                                        enforceNoPastScheduling()
+                                    }
+
+                                if finishDateEnabled {
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            showFinishDateInline.toggle()
+                                            if showFinishDateInline {
+                                                showStartDateInline = false
+                                                showStartTimeInline = false
+                                                showFinishTimeInline = false
+                                            }
+                                        }
+                                    } label: {
+                                        HStack {
+                                            Text("Finish Date").foregroundStyle(FuturistTheme.textPrimary)
+                                            Spacer()
+                                            ValueChip(text: dateString(finishDate))
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    if showFinishDateInline {
+                                        InlineGraphicalCalendar(label: "Finish Date", date: $finishDate, range: startDate...)
+                                            .onChange(of: finishDate) { _, _ in enforceNoPastScheduling() }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
+
+                        BrightLineSeparator()
+
+                        // 4) OCCURRENCE (segmented + weekday chips)
+                        FrostedCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Picker("Occurrence", selection: $occurrence) {
+                                    ForEach(TaskAssignment.Occurrence.allCases) { opt in
+                                        Text(opt.displayName).tag(opt)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .onChange(of: occurrence) { _, newValue in
+                                    if newValue == .onceOnly {
+                                        finishDateEnabled = false
+                                        withAnimation(.easeInOut(duration: 0.18)) { showFinishDateInline = false }
+                                    }
+                                    enforceNoPastScheduling()
+                                }
+
+                                if occurrence == .specifiedDays {
+                                    let allowed = allowedWeekdays
+                                    HStack(spacing: 6) {
+                                        ForEach(0..<7, id: \.self) { idx in
+                                            weekdayChipCompact(
+                                                index: idx,
+                                                label: weekdayLabels[idx],
+                                                isSelected: selectedWeekdays.contains(idx),
+                                                isAllowed: allowed.contains(idx)
+                                            )
+                                        }
+                                    }
+                                    .onChange(of: selectedWeekdays) { _, _ in enforceNoPastScheduling() }
+
+                                    Text(allowedHintText(for: allowed))
+                                        .font(.footnote)
+                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                }
+                            }
+                            .foregroundStyle(FuturistTheme.textPrimary)
+                        }
+                        .padding(.horizontal, 12)
+
+                        BrightLineSeparator()
+
+                        // 5) TIME (inline wheels + notify)
+                        FrostedCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ToggleRow(title: "Start Time", isOn: $startTimeEnabled)
+                                    .onChange(of: startTimeEnabled) { _, enabled in
+                                        if !enabled {
+                                            withAnimation(.easeInOut(duration: 0.18)) { showStartTimeInline = false }
+                                            startNotifyEnabled = false
+                                            skipTodayInfo = nil
+                                        } else {
+                                            withAnimation(.easeInOut(duration: 0.18)) {
+                                                showStartDateInline = false
+                                                showFinishDateInline = false
+                                                showFinishTimeInline = false
+                                            }
+                                        }
+                                        enforceNoPastScheduling()
+                                    }
+
+                                if startTimeEnabled {
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            showStartTimeInline.toggle()
+                                            if showStartTimeInline {
+                                                showStartDateInline = false
+                                                showFinishDateInline = false
+                                                showFinishTimeInline = false
+                                            }
+                                        }
+                                    } label: {
+                                        HStack {
+                                            Text("Start Time").foregroundStyle(FuturistTheme.textPrimary)
+                                            Spacer()
+             

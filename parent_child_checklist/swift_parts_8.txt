@@ -1,4 +1,264 @@
-e: Occurrence
+cer()
+                        if let selectedEmoji {
+                            Text(selectedEmoji).font(.system(size: 32))
+                        } else {
+                            Text("—").foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Picker("Category", selection: $selectedCategory) {
+                        ForEach(EmojiCatalog.Category.allCases) { cat in
+                            Text(cat.rawValue).tag(cat)
+                        }
+                    }
+
+                    // Grid (no text search)
+                    ScrollView {
+                        LazyVGrid(columns: gridColumns, spacing: 10) {
+                            ForEach(baseEmojis, id: \.self) { emoji in
+                                Button {
+                                    selectedEmoji = emoji
+                                    validationMessage = nil
+                                } label: {
+                                    Text(emoji)
+                                        .font(.system(size: 24))
+                                        .frame(maxWidth: .infinity, minHeight: 36)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .fill(selectedEmoji == emoji ? Color.blue.opacity(0.18) : Color.clear)
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .stroke(
+                                                    selectedEmoji == emoji ? Color.blue : Color.secondary.opacity(0.25),
+                                                    lineWidth: selectedEmoji == emoji ? 2 : 1
+                                                )
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(emoji)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(minHeight: 240, maxHeight: 360)
+                    .scrollIndicators(.visible)
+
+                    if selectedCategory == .myEmojis, appState.customEmojis.isEmpty {
+                        Text("No saved emojis yet. Tap “Manage My Emojis” below to add some.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Add Event")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        onCancel?()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(!canSave)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 0) {
+                    Divider()
+                    Button {
+                        showMyEmojisSheet = true
+                    } label: {
+                        HStack {
+                            Text("Manage My Emojis")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: "chevron.up")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal)
+                    }
+                    .buttonStyle(.plain)
+                    .background(.ultraThinMaterial)
+                }
+            }
+            .sheet(isPresented: $showMyEmojisSheet) {
+                CustomEmojiLibraryView { picked in
+                    selectedEmoji = picked
+                    selectedCategory = .myEmojis
+                }
+                .environmentObject(appState)
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    titleFocused = true
+                }
+            }
+            .onChange(of: title) { _, _ in validationMessage = nil }
+        }
+    }
+
+    private func save() {
+        validationMessage = nil
+        guard !trimmedTitle.isEmpty else {
+            validationMessage = "Please enter an event title."
+            return
+        }
+        guard !isDuplicate else {
+            validationMessage = "That event already exists. Please choose a different name."
+            return
+        }
+        guard let emoji = selectedEmoji, !emoji.trimmed.isEmpty else {
+            validationMessage = "Please select an emoji."
+            return
+        }
+
+        // Capture the created template and pass it back via onSaved
+        if let created = appState.createEventTemplate(title: trimmedTitle, iconSymbol: emoji) {
+            onSaved?(created)
+            dismiss()
+        } else {
+            validationMessage = "Couldn’t create event. Please try again."
+        }
+    }
+}
+
+
+===== ./Models.swift =====
+
+//
+// Models.swift
+// parent_child_checklist
+//
+
+import Foundation
+import SwiftUI
+
+// MARK: - Shared Notify Recipient (for Tasks & Events notifications)
+
+enum NotifyRecipient: String, Codable, Hashable, CaseIterable, Identifiable {
+    case both
+    case parent
+    case child
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .both: return "Both"
+        case .parent: return "Parent"
+        case .child: return "Child"
+        }
+    }
+}
+
+// Represents a child profile in the family
+struct ChildProfile: Identifiable, Hashable, Codable {
+    let id: UUID
+    var name: String
+    var colorHex: String
+    /// Child-chosen avatar preset ID.
+    /// - nil means "Not chosen yet" (show placeholder in parent UI).
+    var avatarId: String?
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        colorHex: String,
+        avatarId: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.colorHex = colorHex
+        self.avatarId = avatarId
+    }
+}
+
+// Parent-created reusable tasks (Task Library / Templates)
+struct TaskTemplate: Identifiable, Hashable, Codable {
+    let id: UUID
+    var title: String
+    /// Emoji string stored here
+    var iconSymbol: String
+    /// Reward points for completing this task (min 0)
+    var rewardPoints: Int
+    var createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        iconSymbol: String,
+        rewardPoints: Int = 1,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.title = title
+        self.iconSymbol = iconSymbol
+        self.rewardPoints = max(0, rewardPoints)
+        self.createdAt = createdAt
+    }
+
+    // Defensive decoding for older local JSON
+    enum CodingKeys: String, CodingKey {
+        case id, title, iconSymbol, rewardPoints, createdAt
+    }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
+        title = (try? container.decode(String.self, forKey: .title)) ?? ""
+        iconSymbol = (try? container.decode(String.self, forKey: .iconSymbol)) ?? "✅"
+        createdAt = (try? container.decode(Date.self, forKey: .createdAt)) ?? Date()
+        // If rewardPoints is missing (old saved data), default to 1
+        let decodedPoints = (try? container.decode(Int.self, forKey: .rewardPoints)) ?? 1
+        rewardPoints = max(0, decodedPoints)
+    }
+}
+
+// MARK: - Task Assignment (Child-specific, fully captured snapshot)
+
+struct TaskAssignment: Identifiable, Hashable, Codable {
+    enum Occurrence: String, Codable, CaseIterable, Identifiable {
+        case onceOnly
+        case specifiedDays
+        var id: String { rawValue }
+        var displayName: String {
+            switch self {
+            case .onceOnly: return "Once Only"
+            case .specifiedDays: return "Specified Days"
+            }
+        }
+    }
+
+    let id: UUID
+
+    // Ownership
+    var childId: UUID
+    /// Optional reference to the template used at assignment time.
+    /// We keep the snapshot fields below as the source of truth.
+    var templateId: UUID?
+
+    // Snapshot
+    var taskTitle: String
+    var taskIcon: String
+    var rewardPoints: Int
+
+    // Optional guidance
+    var helper: String?
+
+    // Options
+    var subtractIfNotCompleted: Bool
+    var alertMe: Bool
+    var photoEvidenceRequired: Bool
+    var isActive: Bool
+
+    // Dates
+    var startDate: Date
+    var endDate: Date?
+
+    // Schedule
+    var occurrence: Occurrence
     /// Monday-first weekday selection: 0=Mon ... 6=Sun
     var weekdays: [Int]
 
@@ -1831,146 +2091,4 @@ enum CKSchema {
 
     // MARK: - Record Types
     enum RecordType {
-        static let familyMeta       = "FamilyMeta"
-        static let emojiLibrary     = "EmojiLibrary"
-        static let childProfile     = "ChildProfile"
-        static let taskTemplate     = "TaskTemplate"
-        static let taskAssignment   = "TaskAssignment"
-        static let taskCompletion   = "TaskCompletionRecord"
-        static let locationItem     = "LocationItem"
-        static let eventTemplate    = "EventTemplate"
-        static let eventAssignment  = "EventAssignment"
-    }
-
-    // MARK: - Common Fields
-    enum Common {
-        static let id            = "id"            // String UUID
-        static let createdAt     = "createdAt"     // Date
-        static let updatedAt     = "updatedAt"     // Date
-        static let schemaVersion = "schemaVersion" // Int
-    }
-
-    // MARK: - FamilyMeta Fields
-    enum FamilyMeta {
-        static let title         = "title"         // String
-        static let createdAt     = "createdAt"     // Date
-        static let schemaVersion = "schemaVersion" // Int
-    }
-
-    // MARK: - EmojiLibrary Fields
-    enum EmojiLibrary {
-        static let emojis    = "emojis"    // [String]
-        static let updatedAt = "updatedAt" // Date
-    }
-
-    // MARK: - ChildProfile Fields
-    enum ChildProfile {
-        static let id        = Common.id
-        static let name      = "name"      // String
-        static let colorHex  = "colorHex"  // String
-        static let avatarId  = "avatarId"  // String? (store as String, omit if nil)
-        static let updatedAt = Common.updatedAt
-    }
-
-    // MARK: - TaskTemplate Fields
-    enum TaskTemplate {
-        static let id          = Common.id
-        static let title       = "title"       // String
-        static let iconSymbol  = "iconSymbol"  // String
-        static let rewardPoints = "rewardPoints" // Int
-        static let createdAt   = "createdAt"   // Date
-    }
-
-    // MARK: - TaskAssignment Fields
-    enum TaskAssignment {
-        static let id                        = Common.id
-        static let childId                   = "childId" // String UUID
-        static let templateId                = "templateId" // String? UUID
-
-        // Snapshot
-        static let taskTitle                 = "taskTitle" // String
-        static let taskIcon                  = "taskIcon"  // String
-        static let rewardPoints              = "rewardPoints" // Int
-        static let helper                    = "helper" // String?
-
-        // Options
-        static let subtractIfNotCompleted    = "subtractIfNotCompleted" // Bool
-        static let alertMe                   = "alertMe" // Bool
-        static let photoEvidenceRequired     = "photoEvidenceRequired" // Bool
-        static let isActive                  = "isActive" // Bool
-
-        // Dates
-        static let startDate                 = "startDate" // Date
-        static let endDate                   = "endDate"   // Date?
-
-        // Schedule
-        static let occurrence                = "occurrence" // String rawValue
-        static let weekdays                  = "weekdays"   // [Int] as [NSNumber]
-
-        // Time windows
-        static let startTime                 = "startTime"  // Date?
-        static let finishTime                = "finishTime" // Date?
-
-        // Duration
-        static let durationMinutes           = "durationMinutes" // Int?
-
-        // Linked event
-        static let linkedEventAssignmentId   = "linkedEventAssignmentId" // String? UUID
-
-        // NEW: Notify (Start)
-        static let startNotifyEnabled        = "startNotifyEnabled" // Bool
-        static let startNotifyRecipient      = "startNotifyRecipient" // String (NotifyRecipient.rawValue)
-        static let startNotifyOffsetMinutes  = "startNotifyOffsetMinutes" // Int?
-
-        // NEW: Notify (Finish)
-        static let finishNotifyEnabled       = "finishNotifyEnabled" // Bool
-        static let finishNotifyRecipient     = "finishNotifyRecipient" // String (NotifyRecipient.rawValue)
-        static let finishNotifyOffsetMinutes = "finishNotifyOffsetMinutes" // Int?
-
-        // Audit
-        static let createdAt                 = Common.createdAt
-        static let updatedAt                 = Common.updatedAt
-    }
-
-    // MARK: - TaskCompletionRecord Fields
-    enum TaskCompletionRecord {
-        static let id          = Common.id
-        static let assignmentId = "assignmentId" // String UUID
-        static let day         = "day"          // Date (start-of-day)
-        static let completedAt = "completedAt"  // Date?
-        // NEW (Option A): single CKAsset for full-size photo evidence
-        static let photoAsset  = "photoAsset"   // CKAsset?
-    }
-
-    // MARK: - LocationItem Fields
-    enum LocationItem {
-        static let id        = Common.id
-        static let name      = "name"      // String
-        static let createdAt = Common.createdAt
-        static let updatedAt = Common.updatedAt
-    }
-
-    // MARK: - EventTemplate Fields
-    enum EventTemplate {
-        static let id         = Common.id
-        static let title      = "title"      // String
-        static let iconSymbol = "iconSymbol" // String
-        static let createdAt  = Common.createdAt
-        static let updatedAt  = Common.updatedAt
-    }
-
-    // MARK: - EventAssignment Fields
-    enum EventAssignment {
-        static let id                        = Common.id
-        static let childId                   = "childId" // String UUID
-        static let templateId                = "templateId" // String? UUID
-
-        // Snapshot
-        static let eventTitle                = "eventTitle" // String
-        static let eventIcon                 = "eventIcon"  // String
-        static let helper                    = "helper"     // String?
-        static let isActive                  = "isActive"   // Bool
-
-        // Schedule
-        static let startDate                 = "startDate" // Date
-       
+        static let familyMeta       = "Family

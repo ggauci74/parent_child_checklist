@@ -1,282 +1,4 @@
-                .contextMenu {
-                                    Button(role: .destructive) {
-                                        prepareSingleDelete(emoji)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.horizontal)
-
-                        // Small discoverability hint beneath the grid
-                        Text("Tip: Long‑press an emoji to delete it.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 8)
-                            .padding(.horizontal)
-                            .padding(.bottom, 12)
-                    }
-                }
-            }
-            .navigationTitle("My Emojis")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            // MARK: - Clear All confirmation
-            .alert("Delete all saved emojis?", isPresented: $showClearAllConfirm) {
-                Button("Delete All", role: .destructive) {
-                    appState.deleteAllCustomEmojis()
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                let inUse = appState.countCustomEmojisInUse()
-                let total = appState.customEmojis.count
-                if inUse > 0 {
-                    Text("This will remove \(total) saved emojis.\n\(inUse) of them are used by templates. Deleting won’t change any existing tasks or events.")
-                } else {
-                    Text("This will remove \(total) saved emojis. Deleting won’t change any existing tasks or events.")
-                }
-            }
-            // MARK: - Single delete confirmation (when in use)
-            .alert("Delete this emoji?", isPresented: $showSingleDeleteConfirm, presenting: emojiPendingDelete) { emoji in
-                Button("Delete", role: .destructive) {
-                    if let e = emojiPendingDelete {
-                        appState.deleteCustomEmoji(e)
-                        emojiPendingDelete = nil
-                    }
-                }
-                Button("Cancel", role: .cancel) {
-                    emojiPendingDelete = nil
-                }
-            } message: { _ in
-                if let msg = singleDeleteUsageMessage {
-                    Text(msg)
-                } else {
-                    Text("This will remove the emoji from your saved list. Deleting won’t change any existing tasks or events.")
-                }
-            }
-        }
-    }
-
-    // MARK: - Actions
-    private func addEmoji() {
-        message = nil
-        let t = inputEmoji.trimmed
-        guard !t.isEmpty else {
-            message = "Please paste an emoji."
-            return
-        }
-        guard t.containsEmoji else {
-            message = "That doesn’t look like an emoji."
-            return
-        }
-        guard !appState.isCustomEmojiTaken(t) else {
-            message = "That emoji is already saved."
-            return
-        }
-        let ok = appState.addCustomEmoji(t)
-        if ok {
-            inputEmoji = ""
-            message = "Added ✅ Tap an emoji below to use it."
-        } else {
-            message = "Couldn’t add that emoji. Try again."
-        }
-    }
-
-    /// Initiates single-emoji deletion. If the emoji is used in templates, ask for confirmation.
-    private func prepareSingleDelete(_ emoji: String) {
-        let usage = appState.emojiUsage(emoji)
-        if usage.tasks > 0 || usage.events > 0 {
-            // Build a friendly usage message
-            var parts: [String] = []
-            if usage.tasks > 0 { parts.append("\(usage.tasks) task template\(usage.tasks == 1 ? "" : "s")") }
-            if usage.events > 0 { parts.append("\(usage.events) event template\(usage.events == 1 ? "" : "s")") }
-            let joined = parts.joined(separator: " and ")
-            singleDeleteUsageMessage =
-            """
-            This emoji is used in \(joined).
-            Deleting won’t change any existing tasks or events, but you won’t be able to select it again in those templates unless you save it here again.
-            """
-            emojiPendingDelete = emoji
-            showSingleDeleteConfirm = true
-        } else {
-            // Not used anywhere — delete immediately
-            appState.deleteCustomEmoji(emoji)
-        }
-    }
-}
-
-
-
-===== ./PointsHistoryView.swift =====
-
-//
-// PointsHistoryView.swift
-// parent_child_checklist
-//
-// Read-only ledger history for a child:
-// - Shows current balance at the top
-// - Shows last N days (matches AppState.ledgerWindowDays)
-// - Adds a "Balance carried forward" snapshot item at cutoff when older entries existed
-// - Coalesces bursty manual adjustments (±1 taps) into a single display row
-// - Shows task titles for completed/un-ticked entries
-// - Shows reward titles for claimed entries
-// - The small subtitle row places the time first, then the item title (if any)
-//
-
-import SwiftUI
-
-struct PointsHistoryView: View {
-    let childId: UUID
-    @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
-
-    // How tightly to group manual +/- taps into one display row
-    private let burstWindow: TimeInterval = 60 // seconds
-
-    // How far to look around a .redeemed points entry to match the claimed RewardRequest (title)
-    private let rewardMatchWindow: TimeInterval = 5 * 60 // 5 minutes
-
-    private var child: ChildProfile? {
-        appState.children.first(where: { $0.id == childId })
-    }
-
-    private var cutoffDay: Date {
-        let days = appState.ledgerWindowDays
-        let now = Date()
-        let date = Calendar.current.date(byAdding: .day, value: -days, to: now) ?? now
-        return Calendar.current.startOfDay(for: date)
-    }
-
-    // Raw recent entries (>= cutoff), newest first by day then createdAt
-    private var recentEntriesRaw: [PointsEntry] {
-        appState.pointsLedger
-            .filter { $0.childId == childId && Calendar.current.startOfDay(for: $0.day) >= cutoffDay }
-            .sorted {
-                let d0 = Calendar.current.startOfDay(for: $0.day)
-                let d1 = Calendar.current.startOfDay(for: $1.day)
-                if d0 != d1 { return d0 > d1 }            // newer day first
-                return $0.createdAt > $1.createdAt        // newer within day first
-            }
-    }
-
-    // Whether there was older history (before cutoff).
-    private var hadOlderHistory: Bool {
-        appState.pointsLedger.contains { $0.childId == childId && Calendar.current.startOfDay(for: $0.day) < cutoffDay }
-    }
-
-    // Display model (coalesced)
-    private struct DisplayRow: Identifiable, Equatable {
-        let id = UUID()
-        let day: Date
-        let createdAt: Date
-        let delta: Int
-        let reason: PointsReason
-        let assignmentId: UUID?
-        let isSnapshot: Bool
-        let coalescedCount: Int  // how many raw entries make up this display row
-        // Optional resolved titles
-        let taskTitle: String?
-        let rewardTitle: String?
-    }
-
-    private struct DayGroup: Identifiable {
-        let id = UUID()
-        let day: Date
-        let rows: [DisplayRow]
-    }
-
-    private var groupedDisplay: [DayGroup] {
-        // 1) group raw entries by day (newest day first)
-        let dict = Dictionary(grouping: recentEntriesRaw, by: { Calendar.current.startOfDay(for: $0.day) })
-        let days = dict.keys.sorted(by: >)
-
-        // 2) for each day, coalesce manual bursts and map to DisplayRow
-        return days.map { day in
-            let items = dict[day]!.sorted(by: { $0.createdAt > $1.createdAt }) // newest first
-
-            var rows: [DisplayRow] = []
-            rows.reserveCapacity(items.count)
-
-            for e in items {
-                let snapshotFlag = isSnapshot(e, cutoffDay: cutoffDay)
-                // Resolve titles
-                let resolvedTaskTitle: String? = e.assignmentId.flatMap { aid in
-                    appState.taskAssignments.first(where: { $0.id == aid })?.taskTitle
-                }
-                let resolvedRewardTitle: String? = (e.reason == .redeemed) ? findClaimedRewardTitle(matching: e) : nil
-
-                if let last = rows.last,
-                   // Coalesce only when both are manualAdjust, same day, close in time
-                   last.reason == .manualAdjust,
-                   e.reason == .manualAdjust,
-                   Calendar.current.isDate(last.day, inSameDayAs: day),
-                   abs(last.createdAt.timeIntervalSince(e.createdAt)) <= burstWindow {
-                    // Merge into the last row: sum delta, keep latest createdAt (last), keep any titles (none for manual)
-                    let merged = DisplayRow(
-                        day: last.day,
-                        createdAt: last.createdAt,
-                        delta: last.delta + e.delta,
-                        reason: .manualAdjust,
-                        assignmentId: nil,
-                        isSnapshot: last.isSnapshot, // should be false for manual entries
-                        coalescedCount: last.coalescedCount + 1,
-                        taskTitle: nil,
-                        rewardTitle: nil
-                    )
-                    rows[rows.count - 1] = merged
-                } else {
-                    // New row
-                    rows.append(DisplayRow(
-                        day: day,
-                        createdAt: e.createdAt,
-                        delta: e.delta,
-                        reason: e.reason,
-                        assignmentId: e.assignmentId,
-                        isSnapshot: snapshotFlag,
-                        coalescedCount: 1,
-                        taskTitle: resolvedTaskTitle,
-                        rewardTitle: resolvedRewardTitle
-                    ))
-                }
-            }
-
-            return DayGroup(day: day, rows: rows)
-        }
-    }
-
-    // Current balance text
-    private var balanceText: String {
-        String(appState.childPointsTotal(childId: childId))
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                // Balance summary at top
-                Section {
-                    HStack(spacing: 10) {
-                        Text("💎")
-                            .font(.system(size: 24))
-                        Text(balanceText)
-                            .font(.system(size: 24, weight: .bold))
-                        Spacer()
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Current balance")
-                    .accessibilityValue(balanceText)
-                }
-
-                // If there was older history but the compactor didn’t insert a snapshot (net 0),
-                // show a neutral "carried forward 0" line so the cutoff is obvious.
-                if hadOlderHistory && !groupedDisplay.contains(where: { group in
-                    group.rows.contains(where: { $0.isSnapshot })
-                }) {
-                    Section {
-                        HStack {
+tack {
                             Text("Balance carried forward")
                             Spacer()
                             Text("💎 0")
@@ -1809,4 +1531,378 @@ struct ParentRewardsTabView: View {
 
                 if let localToastMessage {
                     ToastBannerView(message: localToastMessage)
-                        .transition(
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(10) // ✅ SwiftUI uses .zIndex(_:)
+                }
+            }
+        }
+    }
+
+    // MARK: - Sections / Subviews
+
+    private var balancesSection: some View {
+        Section("Balances") {
+            if appState.children.isEmpty {
+                Text("No children yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(appState.children.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })) { child in
+                    balanceRow(for: child)
+                }
+            }
+        }
+    }
+
+    private var filtersHeader: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                // Status segmented control with counts
+                Picker("Status", selection: $selectedStatus) {
+                    Text("Pending (\(pendingCount))").tag(StatusScope.pending)
+                    Text("Approved (\(approvedCount))").tag(StatusScope.approved)
+                    Text("Claimed (\(claimedCount))").tag(StatusScope.claimed)
+                }
+                .pickerStyle(.segmented)
+
+                // Child filter (compact)
+                HStack(spacing: 10) {
+                    Text("Child")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("Child", selection: Binding(
+                        get: { selectedChildId ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000") ?? UUID() },
+                        set: { newValue in
+                            // special sentinel UUID = All Children
+                            if newValue.uuidString == "00000000-0000-0000-0000-000000000000" {
+                                selectedChildId = nil
+                            } else {
+                                selectedChildId = newValue
+                            }
+                        })) {
+                        Text("All Children").tag(UUID(uuidString: "00000000-0000-0000-0000-000000000000") ?? UUID())
+                        ForEach(appState.children) { child in
+                            Text(child.name).tag(child.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+            }
+            .textCase(nil)
+        }
+    }
+
+    private var emptyStateText: String {
+        let base = "\(selectedStatus.rawValue) requests"
+        if let cid = selectedChildId, !childName(cid).isEmpty {
+            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "No \(base.lowercased()) for \(childName(cid))."
+            } else {
+                return "No \(base.lowercased()) for \(childName(cid)) matching “\(searchText)”."
+            }
+        } else {
+            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "No \(base.lowercased()) to display."
+            } else {
+                return "No \(base.lowercased()) matching “\(searchText)”."
+            }
+        }
+    }
+
+    private func childHeaderText(_ child: ChildProfile?) -> String {
+        child?.name ?? "Child"
+    }
+
+    private func childName(_ id: UUID) -> String {
+        appState.children.first(where: { $0.id == id })?.name ?? "Child"
+    }
+
+    // MARK: - Balances row
+    @ViewBuilder
+    private func balanceRow(for child: ChildProfile) -> some View {
+        let total = appState.childPointsTotal(childId: child.id)
+        HStack(spacing: 12) {
+            // Child name
+            Text(child.name)
+                .font(.headline)
+            Spacer()
+            // Current balance
+            HStack(spacing: 6) {
+                Text("💎")
+                Text("\(total)")
+                    .fontWeight(.semibold)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+
+            // Minus
+            Button {
+                let ok = appState.adjustChildPoints(childId: child.id, delta: -1)
+                if !ok { showToast("Balance can’t go below 0.") }
+            } label: {
+                Image(systemName: "minus.circle.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.red)
+
+            // Plus
+            Button {
+                _ = appState.adjustChildPoints(childId: child.id, delta: +1)
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+
+            // History
+            Button {
+                historyChild = child
+            } label: {
+                Label("History", systemImage: "clock.arrow.circlepath")
+                    .labelStyle(.iconOnly)
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("History for \(child.name)")
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(child.name), \(total) gems")
+    }
+
+    // MARK: - Request row
+    @ViewBuilder
+    private func buttonRow(for req: RewardRequest) -> some View {
+        Button { selected = req } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(childName(req.childId))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    statusPill(req.status)
+                }
+                Text(req.title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(statusDateLine(for: req))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if let cost = req.approvedCost, cost > 0,
+                   (req.status == .approved || req.status == .claimed) {
+                    HStack(spacing: 4) {
+                        Text("💎")
+                        Text("\(cost)").fontWeight(.semibold)
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                _ = appState.deleteRewardRequest(id: req.id)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    private func statusDateLine(for req: RewardRequest) -> String {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .none
+        switch req.status {
+        case .claimed:
+            if let d = req.claimedAt { return "Claimed on \(df.string(from: d))" }
+            if let d = req.approvedAt { return "Approved on \(df.string(from: d))" }
+            if let d = req.notApprovedAt { return "Not this time on \(df.string(from: d))" }
+            return "Requested on \(df.string(from: req.requestedAt))"
+        case .approved:
+            if let d = req.approvedAt { return "Approved on \(df.string(from: d))" }
+            return "Requested on \(df.string(from: req.requestedAt))"
+        case .notApproved:
+            if let d = req.notApprovedAt { return "Not this time on \(df.string(from: d))" }
+            return "Requested on \(df.string(from: req.requestedAt))"
+        case .pending:
+            return "Requested on \(df.string(from: req.requestedAt))"
+        }
+    }
+
+    private func statusPill(_ status: RewardRequestStatus) -> some View {
+        let text = status.childDisplay
+        let bg: Color
+        let fg: Color
+        switch status {
+        case .pending:
+            bg = Color.yellow.opacity(0.18); fg = .orange
+        case .approved:
+            bg = Color.green.opacity(0.18); fg = .green
+        case .notApproved:
+            bg = Color.gray.opacity(0.20); fg = .secondary
+        case .claimed:
+            bg = Color.blue.opacity(0.18); fg = .blue
+        }
+        return Text(text)
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(fg)
+            .background(bg, in: Capsule())
+    }
+
+    private func showToast(_ message: String) {
+        let now = Date()
+        guard now.timeIntervalSince(lastToastAt) > 0.8 else { return } // rate-limit
+        lastToastAt = now
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+            localToastMessage = message
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                localToastMessage = nil
+            }
+        }
+    }
+
+    @State private var showNotApprovedSheet = false
+}
+
+// MARK: - “Not this time” quick view (optional sheet for completeness)
+private struct NotApprovedListView: View {
+    let requests: [RewardRequest]
+    let childName: (UUID) -> String
+    let onOpen: (RewardRequest) -> Void
+    let onDelete: (RewardRequest) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if requests.isEmpty {
+                    Section {
+                        Text("No items.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    // group by child
+                    let dict = Dictionary(grouping: requests, by: { $0.childId })
+                    let keys = dict.keys.sorted { childName($0).localizedCaseInsensitiveCompare(childName($1)) == .orderedAscending }
+                    ForEach(keys, id: \.self) { cid in
+                        Section(header: Text(childName(cid))) {
+                            ForEach(dict[cid] ?? []) { req in
+                                Button { onOpen(req) } label: {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(req.title).font(.headline)
+                                        Text(dateLine(req))
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        onDelete(req)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Not this time")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func dateLine(_ req: RewardRequest) -> String {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .none
+        if let d = req.notApprovedAt { return "Marked on \(df.string(from: d))" }
+        return "Requested on \(df.string(from: req.requestedAt))"
+    }
+}
+
+
+===== ./FamilyDataStore.swift =====
+
+//
+//  FamilyDataStore.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+import Foundation
+import CloudKit
+
+/// Loads the family's data from CloudKit into a single snapshot that AppState can apply.
+/// This class does **read-only** work; write/autosave will be added later.
+@MainActor
+final class FamilyDataStore {
+
+    // MARK: Snapshot
+
+    struct Snapshot {
+        var children: [ChildProfile] = []
+        var taskTemplates: [TaskTemplate] = []
+        var taskAssignments: [TaskAssignment] = []
+        var taskCompletions: [TaskCompletionRecord] = []
+        var customEmojis: [String] = []
+        var eventTemplates: [EventTemplate] = []
+        var eventAssignments: [EventAssignment] = []
+        var locations: [LocationItem] = []
+    }
+
+    // MARK: Dependencies
+
+    private let ck: CloudKitService
+    private let coordinator: FamilyCoordinator
+
+    init(containerIdentifier: String? = nil) {
+        self.ck = CloudKitService(config: .init(containerIdentifier: containerIdentifier))
+        self.coordinator = FamilyCoordinator(ck: ck)
+    }
+
+    // MARK: Load
+
+    /// Bootstraps the family (shared → private → create) and loads every record type from the FamilyZone.
+    /// If the zone exists but is empty (first run), returns an empty snapshot.
+    func loadSnapshot() async throws -> Snapshot {
+        // Determine which DB/zone we should read from.
+        let state = try await coordinator.bootstrapFamily()
+
+        let context: FamilyCoordinator.FamilyContext
+        switch state {
+        case .shared(let ctx):        context = ctx
+        case .privateOwner(let ctx):  context = ctx
+        }
+
+        let db = context.database
+        let zoneID = context.zoneID
+
+        // Kick off all fetches in parallel.
+        async let childrenR         = ck.fetchAll(recordType: CKSchema.RecordType.childProfile,     zoneID: zoneID, from: db)
+        async let templatesR        = ck.fetchAll(recordType: CKSchema.RecordType.taskTemplate,     zoneID: zoneID, from: db)
+        async let assignmentsR      = ck.fetchAll(recordType: CKSchema.RecordType.taskAssignment,   zoneID: zoneID, from: db)
+        async let completionsR      = ck.fetchAll(recordType: CKSchema.RecordType.taskCompletion,   zoneID: zoneID, from: db)
+
+        async let eventTemplatesR   = ck.fetchAll(recordType: CKSchema.RecordType.eventTemplate,    zoneID: zoneID, from: db)
+        async let eventAssignmentsR = ck.fetchAll(recordType: CKSchema.RecordType.eventAssignment,  zoneID: zoneID, from: db)
+        async let locationsR        = ck.fetchAll(recordType: CKSchema.RecordType.locationItem,     zoneID: zoneID, from: db)
+
+        // Emoji library is a singleton record
+        async let emojiRecord

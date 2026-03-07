@@ -357,6 +357,7 @@ struct EditTaskAssignmentView: View {
     }
     private func dayOnly(_ d: Date) -> Date { isoCalendar.startOfDay(for: d) }
     private var startDatePickerLowerBound: Date {
+        // Allow selecting back to the original stored start date (even if it is in the past)
         min(dayOnly(Date()), dayOnly(original.startDate))
     }
     private func showLocalToast(_ message: String) {
@@ -412,19 +413,16 @@ struct EditTaskAssignmentView: View {
         let now = Date()
         let today = dayOnly(Date())
 
-        if dayOnly(startDate) < today {
-            startDate = today
-            if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
-                finishDate = startDate
-            }
-            clampToast("Start date adjusted to today.")
-        }
+        // ❌ Removed: automatic clamping of past Start Date to today (and its toast).
+        // We preserve the original start date in Edit mode.
 
+        // Keep finish date ≥ start date (and show a helpful toast if we auto-correct).
         if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
             finishDate = startDate
             clampToast("Finish date adjusted to match start date.")
         }
 
+        // Same-day time sanity checks (only if not Specified Days)
         let isToday = (dayOnly(startDate) == today)
         if isToday && occurrence != .specifiedDays {
             let nowComps = isoCalendar.dateComponents([.hour, .minute], from: now)
@@ -978,17 +976,27 @@ struct EditTaskAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 7) DELETE
+                        // 7) DELETE (High-contrast pill)
                         FrostedCard {
-                            Button(role: .destructive) {
+                            Button {
                                 showDeleteConfirm = true
                             } label: {
-                                HStack {
-                                    Image(systemName: "trash").font(.body.weight(.semibold))
+                                HStack(spacing: 8) {
+                                    Image(systemName: "trash.fill")
+                                        .font(.body.weight(.semibold))
                                     Text("Delete Assignment")
                                         .font(.body.weight(.semibold))
                                 }
-                                .frame(maxWidth: .infinity, alignment: .center)
+                                .foregroundStyle(Color.white)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(FuturistTheme.softRedBase))
+                                .overlay(
+                                    Capsule()
+                                        .stroke(FuturistTheme.softRedLight.opacity(0.95), lineWidth: 1)
+                                )
+                                .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 2)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -1010,13 +1018,16 @@ struct EditTaskAssignmentView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
 
-            // Custom top bar
+            // ✅ Custom top bar + 12‑pt cushion so pills don’t hug the sheet’s top radius
             .safeAreaInset(edge: .top, spacing: 0) {
-                EditTopBar(
-                    canSave: true,  // tighten if desired
-                    onCancel: { dismiss() },
-                    onSave: { saveEdits() }
-                )
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 12) // ← the cushion
+                    EditTopBar(
+                        canSave: true,  // tighten if desired
+                        onCancel: { dismiss() },
+                        onSave: { saveEdits() }
+                    )
+                }
                 .background(Color.clear)
             }
 
@@ -1034,8 +1045,9 @@ struct EditTaskAssignmentView: View {
 
             // ✨ Match Assign Task segmented styling, scoped to this screen
             .onAppear {
-                enforceNoPastScheduling()
-                handlePastTimeOnTodayIfNeeded()
+                // ⛔️ Removed automatic enforcement on appear to avoid changing existing data
+                // enforceNoPastScheduling()
+                // handlePastTimeOnTodayIfNeeded()
 
                 // Backup current UISegmentedControl appearance
                 prevSegTitleAttrsNormal   = UISegmentedControl.appearance().titleTextAttributes(for: .normal)

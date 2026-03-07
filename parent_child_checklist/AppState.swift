@@ -370,6 +370,7 @@ final class AppState: ObservableObject {
         return true
     }
 
+    // ✅ FIXED: non-strict linker (assign back to task.endDate, never to a `let`)
     private func applyLinkedEventSchedule(to task: inout TaskAssignment, event: EventAssignment) {
         if !event.isActive {
             task.linkedEventAssignmentId = nil
@@ -381,15 +382,32 @@ final class AppState: ObservableObject {
             task.weekdays = []
             task.startDate = event.startDate
             task.endDate = nil
+
         case .specifiedDays:
             task.occurrence = .specifiedDays
             task.weekdays = event.weekdays.sorted()
-            if task.startDate < event.startDate { task.startDate = event.startDate }
+
+            // Ensure task start is not before the event start
+            if task.startDate < event.startDate {
+                task.startDate = event.startDate
+            }
+
             if let eventEnd = event.endDate {
-                if let taskEnd = task.endDate { task.endDate = min(taskEnd, eventEnd) } else { task.endDate = eventEnd }
-                if let taskEnd = task.endDate, taskEnd < task.startDate { task.endDate = task.startDate }
-            } else if let taskEnd = task.endDate, taskEnd < task.startDate {
-                task.endDate = task.startDate
+                // If task already has an end date, clamp it to eventEnd; otherwise adopt eventEnd
+                if let currentTaskEnd = task.endDate {
+                    task.endDate = min(currentTaskEnd, eventEnd)
+                } else {
+                    task.endDate = eventEnd
+                }
+                // Never let end be before start
+                if let currentTaskEnd = task.endDate, currentTaskEnd < task.startDate {
+                    task.endDate = task.startDate
+                }
+            } else {
+                // Event has no end; ensure task.endDate (if present) is not before start
+                if let currentTaskEnd = task.endDate, currentTaskEnd < task.startDate {
+                    task.endDate = task.startDate
+                }
             }
         }
     }
@@ -1076,5 +1094,90 @@ extension AppState {
             }
         }
         return used
+    }
+}
+
+// MARK: - Points history cleanup (remove rows not needed for current balance; no snapshots)
+extension AppState {
+
+    struct HistoryCleanPreview: Equatable {
+        let removableIds: Set<UUID>
+        let removeCount: Int
+        let keepCount: Int
+    }
+
+    /// Dry-run: compute which rows for this child can be safely removed without changing the current total.
+    /// Strategy: cancel exact +k / -k pairs by magnitude across the entire history (no snapshots).
+    func previewCleanChildPointsHistory(childId: UUID) -> HistoryCleanPreview {
+        let entries = pointsLedger.filter { $0.childId == childId }
+        guard !entries.isEmpty else {
+            return .init(removableIds: [], removeCount: 0, keepCount: 0)
+        }
+
+        // Group by |delta| and split by sign; operate oldest-first so newer history is favored.
+        var byMagPos: [Int: [PointsEntry]] = [:]   // magnitude -> [+k entries], oldest → newest
+        var byMagNeg: [Int: [PointsEntry]] = [:]   // magnitude -> [-k entries], oldest → newest
+
+        let sortedOldestFirst = entries.sorted { a, b in
+            if dayOnly(a.day) != dayOnly(b.day) { return dayOnly(a.day) < dayOnly(b.day) }
+            return a.createdAt < b.createdAt
+        }
+
+        for e in sortedOldestFirst {
+            let mag = abs(e.delta)
+            guard mag > 0 else { continue }
+            if e.delta > 0 {
+                byMagPos[mag, default: []].append(e)
+            } else {
+                byMagNeg[mag, default: []].append(e)
+            }
+        }
+
+        // Pair off as many +mag with -mag as possible; mark both as removable.
+        var removable = Set<UUID>()
+        for mag in Set(byMagPos.keys).union(byMagNeg.keys) {
+            let pos = byMagPos[mag] ?? []
+            let neg = byMagNeg[mag] ?? []
+            if pos.isEmpty || neg.isEmpty { continue }
+            let c = min(pos.count, neg.count)
+            if c > 0 {
+                for i in 0..<c {
+                    removable.insert(pos[i].id)
+                    removable.insert(neg[i].id)
+                }
+            }
+        }
+
+        let removeCount = removable.count
+        let keepCount = entries.count - removeCount
+        return .init(removableIds: removable, removeCount: removeCount, keepCount: keepCount)
+    }
+
+    /// Apply the cleanup computed by `previewCleanChildPointsHistory` (no undo, no snapshots).
+    /// Returns (removed, kept).
+    @discardableResult
+    func cleanChildPointsHistory(childId: UUID) -> (removed: Int, kept: Int) {
+        let preview = previewCleanChildPointsHistory(childId: childId)
+        guard !preview.removableIds.isEmpty else {
+            let kept = pointsLedger.filter { $0.childId == childId }.count
+            return (0, kept)
+        }
+
+        // Sanity: verify total before/after remains the same.
+        let beforeTotal = childPointsTotal(childId: childId)
+
+        pointsLedger.removeAll { e in
+            e.childId == childId && preview.removableIds.contains(e.id)
+        }
+
+        let afterTotal = childPointsTotal(childId: childId)
+        if beforeTotal != afterTotal {
+            // This should not happen with exact +k/-k pairing. If it does, log and bail.
+            print("❌ Clean history sanity check failed: before=\(beforeTotal), after=\(afterTotal)")
+        }
+
+        // JSON autosave for pointsLedger is already wired.
+        let kept = pointsLedger.filter { $0.childId == childId }.count
+        return (preview.removeCount, kept)
     }
 }
