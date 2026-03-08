@@ -258,7 +258,7 @@ private struct ValueChip: View {
     }
 }
 
-// MARK: - Assign-To (PUSH) destination
+// MARK: - Assign-To (PUSH) destination — Futurist restyle (multi-select)
 private struct AssignToPickerScreen: View {
     let allChildren: [ChildProfile]
     let preselected: Set<UUID>
@@ -266,39 +266,217 @@ private struct AssignToPickerScreen: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var working: Set<UUID> = []
+    @State private var query: String = ""
+
+    private var filteredChildren: [ChildProfile] {
+        let base = allChildren.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return base }
+        return base.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var canApply: Bool { !working.isEmpty }
 
     var body: some View {
-        List {
-            ForEach(allChildren) { child in
-                Button {
-                    if working.contains(child.id) { working.remove(child.id) }
-                    else { working.insert(child.id) }
-                } label: {
-                    HStack(spacing: 12) {
-                        ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 32)
-                        Text(child.name)
-                        Spacer()
-                        Image(systemName: working.contains(child.id) ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(working.contains(child.id) ? Color.accentColor : Color.secondary)
+        ZStack(alignment: .top) {
+            // Background
+            CurvyAquaBlueBackground(animate: true)
+                .ignoresSafeArea()
+
+            // Content
+            ScrollView {
+                VStack(spacing: 0) {
+
+                    // Search
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Search")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                            HStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                TextField("Find a child…", text: $query)
+                                    .textInputAutocapitalization(.words)
+                                    .autocorrectionDisabled(true)
+                                    .foregroundStyle(FuturistTheme.textPrimary)
+                            }
+                            .padding(10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                        }
+                        .foregroundStyle(FuturistTheme.textPrimary)
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+
+                    BrightLineSeparator()
+
+                    // Children list (as a single frosted card with rows)
+                    FrostedCard {
+                        VStack(spacing: 0) {
+                            ForEach(filteredChildren) { child in
+                                Button {
+                                    toggle(child.id)
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        ChildAvatarCircleView(
+                                            colorHex: child.colorHex,
+                                            avatarId: child.avatarId,
+                                            size: 32
+                                        )
+
+                                        Text(child.name)
+                                            .foregroundStyle(FuturistTheme.textPrimary)
+                                            .lineLimit(1)
+
+                                        Spacer()
+
+                                        // Selection indicator
+                                        Image(systemName: working.contains(child.id) ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(
+                                                working.contains(child.id) ? FuturistTheme.neonAqua : Color.white.opacity(0.45)
+                                            )
+                                            .accessibilityHidden(true)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(working.contains(child.id) ? Color.white.opacity(0.06) : Color.clear)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(child.name), \(working.contains(child.id) ? "selected" : "not selected")")
+
+                                // Row divider (subtle)
+                                if child.id != filteredChildren.last?.id {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.08))
+                                        .frame(height: 1)
+                                        .padding(.leading, 46) // align under avatar
+                                        .accessibilityHidden(true)
+                                }
+                            }
+
+                            if filteredChildren.isEmpty {
+                                Text("No matches")
+                                    .font(.footnote)
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    BrightLineSeparator()
+
+                    // Select All / Clear All
+                    FrostedCard {
+                        HStack(spacing: 12) {
+                            Button {
+                                working = Set(allChildren.map(\.id))
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Select All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                working.removeAll()
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Clear All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Spacer()
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    Spacer(minLength: 24)
                 }
-                .buttonStyle(.plain)
+                .padding(.bottom, 24)
             }
         }
-        .navigationTitle("Choose Children")
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarLeading) {
-                Button("Select All") { working = Set(allChildren.map(\.id)) }
-                Button("Clear All") { working.removeAll() }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") {
-                    onApply(working)
-                    dismiss()
+        // Hide system nav; themed top bar below
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+
+        // Top bar with Cancel / Apply pills
+        .safeAreaInset(edge: .top, spacing: 0) {
+            let pillWidth: CGFloat = 76
+            let pillHeight: CGFloat = 32
+
+            ZStack {
+                Text("Assign To")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+
+                HStack {
+                    ToolbarPillButton(
+                        label: "Cancel",
+                        foreground: .white,
+                        background: FuturistTheme.softRedLight,
+                        stroke: FuturistTheme.softRedBase.opacity(0.75),
+                        fixedWidth: pillWidth,
+                        fixedHeight: pillHeight,
+                        action: { dismiss() }
+                    )
+
+                    Spacer(minLength: 12)
+
+                    ToolbarPillButton(
+                        label: "Apply",
+                        foreground: canApply ? Color.black.opacity(0.9) : FuturistTheme.textSecondary,
+                        background: canApply ? FuturistTheme.softGreenLight : Color.clear,
+                        stroke: canApply ? FuturistTheme.softGreenBase.opacity(0.75)
+                                         : FuturistTheme.textSecondary.opacity(0.35),
+                        disabled: !canApply,
+                        glow: canApply,
+                        fixedWidth: pillWidth,
+                        fixedHeight: pillHeight,
+                        action: {
+                            guard canApply else { return }
+                            onApply(working)
+                            dismiss()
+                        }
+                    )
                 }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
+            .background(Color.clear)
         }
         .onAppear { working = preselected }
+    }
+
+    private func toggle(_ id: UUID) {
+        if working.contains(id) { working.remove(id) } else { working.insert(id) }
     }
 }
 

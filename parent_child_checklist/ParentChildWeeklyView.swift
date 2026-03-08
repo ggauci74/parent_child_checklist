@@ -525,7 +525,11 @@ struct ParentChildWeeklyView: View {
                         onToggleComplete: {
                           appState.toggleCompletion(assignmentId: assignment.id, on: selectedDate)
                         },
-                        onTap: { assignmentToEdit = assignment },
+                        onEdit: { assignmentToEdit = assignment },
+                        onDelete: {
+                          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                          appState.deleteTaskAssignment(id: assignment.id)
+                        },
                         onViewPhoto: {
                           guard let comp = completion, comp.hasPhotoEvidence else { return }
                           viewerTaskTitle = assignment.taskTitle
@@ -551,12 +555,6 @@ struct ParentChildWeeklyView: View {
                       }
                     }
                   }
-                  .onDelete { indexSet in
-                    for idx in indexSet {
-                      let a = unlinkedTasksSortedForDisplay[idx]
-                      appState.deleteTaskAssignment(id: a.id)
-                    }
-                  }
                 } header: {
                   Text(standaloneTasksSectionTitle)
                     .foregroundStyle(FuturistTheme.textPrimary)
@@ -574,7 +572,11 @@ struct ParentChildWeeklyView: View {
                     VStack(spacing: 0) {
                       EventAssignmentRow(
                         event: event,
-                        onTap: { eventToEdit = event },
+                        onEdit: { eventToEdit = event },
+                        onDelete: {
+                          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                          appState.deleteEventAssignment(id: event.id)
+                        },
                         headlineColor: FuturistTheme.textPrimary,
                         metaColor: FuturistTheme.textSecondary
                       )
@@ -584,13 +586,6 @@ struct ParentChildWeeklyView: View {
                     .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
                     .listRowSeparator(.hidden)
                     .listRowBackground(CardBackground())
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                      Button(role: .destructive) {
-                        appState.deleteEventAssignment(id: event.id)
-                      } label: {
-                        Label("Delete", systemImage: "trash")
-                      }
-                    }
                     .overlay(alignment: .bottomLeading) {
                       if index < items.count - 1 {
                         TaskRowGradientRule(
@@ -617,7 +612,11 @@ struct ParentChildWeeklyView: View {
                             onToggleComplete: {
                               appState.toggleCompletion(assignmentId: assignment.id, on: selectedDate)
                             },
-                            onTap: { assignmentToEdit = assignment },
+                            onEdit: { assignmentToEdit = assignment },
+                            onDelete: {
+                              UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                              appState.deleteTaskAssignment(id: assignment.id)
+                            },
                             onViewPhoto: {
                               guard let comp = completion, comp.hasPhotoEvidence else { return }
                               viewerTaskTitle = assignment.taskTitle
@@ -633,13 +632,6 @@ struct ParentChildWeeklyView: View {
                         .listRowInsets(EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12))
                         .listRowSeparator(.hidden)
                         .listRowBackground(CardBackground())
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                          Button(role: .destructive) {
-                            appState.deleteTaskAssignment(id: assignment.id)
-                          } label: {
-                            Label("Delete", systemImage: "trash")
-                          }
-                        }
                       }
                     }
                   }
@@ -666,18 +658,18 @@ struct ParentChildWeeklyView: View {
     withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
       selectedDate = isoCalendar.startOfDay(for: today)
     }
-    // (onChange of selectedDate will persist)
   }
 }
 
-// MARK: - Task row (PARENT) — radios match child: magenta ring / green + dark fill + white check
+// MARK: - Task row (PARENT) — centered action cluster
 private struct TaskAssignmentRow: View {
   let assignment: TaskAssignment
   let selectedDate: Date
   let isCompleted: Bool
   let completionForSelectedDay: TaskCompletionRecord?
   let onToggleComplete: () -> Void
-  let onTap: () -> Void
+  let onEdit: () -> Void
+  let onDelete: () -> Void
   let onViewPhoto: (() -> Void)?
   var headlineColor: Color = FuturistTheme.textPrimary
   var metaColor: Color = FuturistTheme.textSecondary
@@ -698,17 +690,17 @@ private struct TaskAssignmentRow: View {
     let checked = isCompleted
     return ZStack {
       Circle()
-        .stroke(FuturistTheme.magenta, lineWidth: 2.5) // outer ring (unchecked colour)
+        .stroke(FuturistTheme.magenta, lineWidth: 2.5)
       if checked {
         Circle()
-          .fill(Color.black.opacity(0.60)) // dark inner when checked
+          .fill(Color.black.opacity(0.60))
           .overlay(
             Image(systemName: "checkmark")
               .font(.system(size: 11, weight: .heavy))
               .foregroundStyle(.white)
           )
           .overlay(
-            Circle().stroke(FuturistTheme.green, lineWidth: 2.5) // green ring when checked
+            Circle().stroke(FuturistTheme.green, lineWidth: 2.5)
           )
       }
     }
@@ -717,7 +709,7 @@ private struct TaskAssignmentRow: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      HStack(alignment: .top, spacing: 12) {
+      HStack(alignment: .center, spacing: 12) {   // ⬅️ center vertically
         // Radio
         Button(action: onToggleComplete) {
           radio
@@ -736,7 +728,7 @@ private struct TaskAssignmentRow: View {
             if dimmed { inactiveBadge }
           }
 
-          // Meta line (points + time)
+          // Meta line (points + time + camera when required)
           HStack(spacing: 8) {
             if assignment.rewardPoints > 0 {
               HStack(spacing: 3) {
@@ -754,6 +746,13 @@ private struct TaskAssignmentRow: View {
               Text(formatTime(ft))
                 .foregroundStyle(metaColor)
             }
+
+            if assignment.photoEvidenceRequired {
+              Image(systemName: "camera.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(metaColor)
+                .accessibilityLabel("Photo evidence required")
+            }
           }
           .font(.footnote)
 
@@ -764,7 +763,7 @@ private struct TaskAssignmentRow: View {
               .foregroundStyle(metaColor)
           }
 
-          // Photo evidence chip
+          // Photo evidence chip (only when a completion with photo exists)
           if completionForSelectedDay?.hasPhotoEvidence == true {
             Button(action: { onViewPhoto?() }) {
               HStack(spacing: 6) {
@@ -784,14 +783,41 @@ private struct TaskAssignmentRow: View {
 
         Spacer(minLength: 8)
 
-        // Edit chevron
-        Image(systemName: "chevron.right")
-          .foregroundStyle(FuturistTheme.textSecondary)
-          .onTapGesture { onTap() }
+        // Trailing actions (center vertically)
+        HStack(spacing: 10) {
+          Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onEdit()
+          } label: {
+            Text("Edit")
+              .font(.footnote.weight(.semibold))
+              .foregroundStyle(Color.white)
+              .padding(.horizontal, 10)
+              .padding(.vertical, 6)
+              .background(Color.white.opacity(0.12), in: Capsule())
+              .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Edit task")
+
+          Menu {
+            Button(role: .destructive) {
+              onDelete()
+            } label: {
+              Label("Delete", systemImage: "trash")
+            }
+          } label: {
+            Image(systemName: "ellipsis.circle")
+              .font(.title3)
+              .foregroundStyle(FuturistTheme.textSecondary)
+              .padding(.horizontal, 2)
+          }
+          .accessibilityLabel("More actions")
+        }
+        .frame(maxHeight: .infinity) // ⬅️ participate in row height for true centering
       }
     }
     .contentShape(Rectangle())
-    .onTapGesture { onTap() }
   }
 
   private func formatTime(_ date: Date) -> String {
@@ -802,18 +828,20 @@ private struct TaskAssignmentRow: View {
   }
 }
 
-// MARK: - Event row (PARENT)
+// MARK: - Event row (PARENT) — centered action cluster
 private struct EventAssignmentRow: View {
   let event: EventAssignment
-  let onTap: () -> Void
+  let onEdit: () -> Void
+  let onDelete: () -> Void
   var headlineColor: Color = FuturistTheme.textPrimary
   var metaColor: Color = FuturistTheme.textSecondary
 
   private var dimmed: Bool { !event.isActive }
 
   var body: some View {
-    HStack(alignment: .center, spacing: 12) {
+    HStack(alignment: .center, spacing: 12) { // already centered; keep it
       TaskEmojiIconView(icon: event.eventIcon, size: 20)
+
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
           Text(event.eventTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled Event" : event.eventTitle)
@@ -852,12 +880,40 @@ private struct EventAssignmentRow: View {
 
       Spacer(minLength: 8)
 
-      Image(systemName: "chevron.right")
-        .foregroundStyle(FuturistTheme.textSecondary)
-        .onTapGesture { onTap() }
+      // Trailing actions (center vertically)
+      HStack(spacing: 10) {
+        Button {
+          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+          onEdit()
+        } label: {
+          Text("Edit")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.12), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Edit event")
+
+        Menu {
+          Button(role: .destructive) {
+            onDelete()
+          } label: {
+            Label("Delete", systemImage: "trash")
+          }
+        } label: {
+          Image(systemName: "ellipsis.circle")
+            .font(.title3)
+            .foregroundStyle(FuturistTheme.textSecondary)
+            .padding(.horizontal, 2)
+        }
+        .accessibilityLabel("More actions")
+      }
+      .frame(maxHeight: .infinity) // ⬅️ ensures the cluster sits at vertical middle
     }
     .contentShape(Rectangle())
-    .onTapGesture { onTap() }
   }
 
   private func dateLine() -> String {

@@ -23,6 +23,10 @@ private enum FuturistTheme {
     // Text
     static let textPrimary   = Color(red: 0.92, green: 0.97, blue: 1.00)
     static let textSecondary = Color(red: 0.63, green: 0.73, blue: 0.82)
+
+    // --- NEW: soft-red palette to match parent screen pills ---
+    static let softRedBase  = Color(red: 1.00, green: 0.36, blue: 0.43)  // base tone
+    static let softRedLight = Color(red: 1.00, green: 0.58, blue: 0.63)  // lighter text tone
 }
 
 // Micro-elevation card background (matches Today’s screen)
@@ -215,42 +219,47 @@ struct ChildRewardsView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .top) {
-                CurvyAquaBlueBackground(animate: true)
+            ZZZBackgroundAndContent
+        }
+    }
 
-                VStack(spacing: 0) {
-                    if let child {
-                        ChildHeaderView(child: child, points: pointsValue)
-                            .padding(.horizontal)
-                        Text("Requests")
-                            .font(.system(size: nameFontSize, weight: .regular))
-                            .foregroundStyle(FuturistTheme.textPrimary)
-                            .padding(.top, 2)
+    // Extracted for readability
+    private var ZZZBackgroundAndContent: some View {
+        ZStack(alignment: .top) {
+            CurvyAquaBlueBackground(animate: true)
 
-                        ZStack {
-                            LowerContentSweep()
-                            screenContent
-                        }
-                    } else {
-                        VStack {
-                            Spacer()
-                            Text("That child profile can’t be found.")
-                                .foregroundStyle(FuturistTheme.textSecondary)
-                            Spacer()
-                        }
+            VStack(spacing: 0) {
+                if let child {
+                    ChildHeaderView(child: child, points: pointsValue)
+                        .padding(.horizontal)
+                    Text("Requests")
+                        .font(.system(size: nameFontSize, weight: .regular))
+                        .foregroundStyle(FuturistTheme.textPrimary)
+                        .padding(.top, 2)
+
+                    ZStack {
+                        LowerContentSweep()
+                        screenContent
+                    }
+                } else {
+                    VStack {
+                        Spacer()
+                        Text("That child profile can’t be found.")
+                            .foregroundStyle(FuturistTheme.textSecondary)
+                        Spacer()
                     }
                 }
-
-                if let toastMessage {
-                    ToastBannerView(message: toastMessage)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .zIndex(10)
-                }
             }
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationBarHidden(true)
+
+            if let toastMessage {
+                ToastBannerView(message: toastMessage)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(10)
+            }
         }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(true)
     }
 
     // MARK: - Screen content (composer card + custom segmented pills + segmented lists)
@@ -791,7 +800,8 @@ private struct RewardRequestRowView: View {
             case .approved:
                 return (Color.green.opacity(0.22), Color.green)
             case .notApproved:
-                return (Color.white.opacity(0.14), Color.white.opacity(0.90))
+                // --- CHANGED: Use soft-red palette to match parent screen ---
+                return (FuturistTheme.softRedBase.opacity(0.22), FuturistTheme.softRedLight)
             case .claimed:
                 return (Color.blue.opacity(0.22), Color.blue)
             }

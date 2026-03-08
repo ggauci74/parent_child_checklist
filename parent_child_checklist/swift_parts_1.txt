@@ -556,6 +556,7 @@ final class AppState: ObservableObject {
         return true
     }
 
+    // ✅ FIXED: non-strict linker (assign back to task.endDate, never to a `let`)
     private func applyLinkedEventSchedule(to task: inout TaskAssignment, event: EventAssignment) {
         if !event.isActive {
             task.linkedEventAssignmentId = nil
@@ -567,15 +568,32 @@ final class AppState: ObservableObject {
             task.weekdays = []
             task.startDate = event.startDate
             task.endDate = nil
+
         case .specifiedDays:
             task.occurrence = .specifiedDays
             task.weekdays = event.weekdays.sorted()
-            if task.startDate < event.startDate { task.startDate = event.startDate }
+
+            // Ensure task start is not before the event start
+            if task.startDate < event.startDate {
+                task.startDate = event.startDate
+            }
+
             if let eventEnd = event.endDate {
-                if let taskEnd = task.endDate { task.endDate = min(taskEnd, eventEnd) } else { task.endDate = eventEnd }
-                if let taskEnd = task.endDate, taskEnd < task.startDate { task.endDate = task.startDate }
-            } else if let taskEnd = task.endDate, taskEnd < task.startDate {
-                task.endDate = task.startDate
+                // If task already has an end date, clamp it to eventEnd; otherwise adopt eventEnd
+                if let currentTaskEnd = task.endDate {
+                    task.endDate = min(currentTaskEnd, eventEnd)
+                } else {
+                    task.endDate = eventEnd
+                }
+                // Never let end be before start
+                if let currentTaskEnd = task.endDate, currentTaskEnd < task.startDate {
+                    task.endDate = task.startDate
+                }
+            } else {
+                // Event has no end; ensure task.endDate (if present) is not before start
+                if let currentTaskEnd = task.endDate, currentTaskEnd < task.startDate {
+                    task.endDate = task.startDate
+                }
             }
         }
     }
@@ -1265,6 +1283,91 @@ extension AppState {
     }
 }
 
+// MARK: - Points history cleanup (remove rows not needed for current balance; no snapshots)
+extension AppState {
+
+    struct HistoryCleanPreview: Equatable {
+        let removableIds: Set<UUID>
+        let removeCount: Int
+        let keepCount: Int
+    }
+
+    /// Dry-run: compute which rows for this child can be safely removed without changing the current total.
+    /// Strategy: cancel exact +k / -k pairs by magnitude across the entire history (no snapshots).
+    func previewCleanChildPointsHistory(childId: UUID) -> HistoryCleanPreview {
+        let entries = pointsLedger.filter { $0.childId == childId }
+        guard !entries.isEmpty else {
+            return .init(removableIds: [], removeCount: 0, keepCount: 0)
+        }
+
+        // Group by |delta| and split by sign; operate oldest-first so newer history is favored.
+        var byMagPos: [Int: [PointsEntry]] = [:]   // magnitude -> [+k entries], oldest → newest
+        var byMagNeg: [Int: [PointsEntry]] = [:]   // magnitude -> [-k entries], oldest → newest
+
+        let sortedOldestFirst = entries.sorted { a, b in
+            if dayOnly(a.day) != dayOnly(b.day) { return dayOnly(a.day) < dayOnly(b.day) }
+            return a.createdAt < b.createdAt
+        }
+
+        for e in sortedOldestFirst {
+            let mag = abs(e.delta)
+            guard mag > 0 else { continue }
+            if e.delta > 0 {
+                byMagPos[mag, default: []].append(e)
+            } else {
+                byMagNeg[mag, default: []].append(e)
+            }
+        }
+
+        // Pair off as many +mag with -mag as possible; mark both as removable.
+        var removable = Set<UUID>()
+        for mag in Set(byMagPos.keys).union(byMagNeg.keys) {
+            let pos = byMagPos[mag] ?? []
+            let neg = byMagNeg[mag] ?? []
+            if pos.isEmpty || neg.isEmpty { continue }
+            let c = min(pos.count, neg.count)
+            if c > 0 {
+                for i in 0..<c {
+                    removable.insert(pos[i].id)
+                    removable.insert(neg[i].id)
+                }
+            }
+        }
+
+        let removeCount = removable.count
+        let keepCount = entries.count - removeCount
+        return .init(removableIds: removable, removeCount: removeCount, keepCount: keepCount)
+    }
+
+    /// Apply the cleanup computed by `previewCleanChildPointsHistory` (no undo, no snapshots).
+    /// Returns (removed, kept).
+    @discardableResult
+    func cleanChildPointsHistory(childId: UUID) -> (removed: Int, kept: Int) {
+        let preview = previewCleanChildPointsHistory(childId: childId)
+        guard !preview.removableIds.isEmpty else {
+            let kept = pointsLedger.filter { $0.childId == childId }.count
+            return (0, kept)
+        }
+
+        // Sanity: verify total before/after remains the same.
+        let beforeTotal = childPointsTotal(childId: childId)
+
+        pointsLedger.removeAll { e in
+            e.childId == childId && preview.removableIds.contains(e.id)
+        }
+
+        let afterTotal = childPointsTotal(childId: childId)
+        if beforeTotal != afterTotal {
+            // This should not happen with exact +k/-k pairing. If it does, log and bail.
+            print("❌ Clean history sanity check failed: before=\(beforeTotal), after=\(afterTotal)")
+        }
+
+        // JSON autosave for pointsLedger is already wired.
+        let kept = pointsLedger.filter { $0.childId == childId }.count
+        return (preview.removeCount, kept)
+    }
+}
+
 
 ===== ./ParentChildWeeklyView.swift =====
 
@@ -1348,16 +1451,47 @@ private struct TaskRowGradientRule: View {
   }
 }
 
+// MARK: - Header child-switch arrows
+private struct ChildSwitchArrow: View {
+  let systemName: String
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: { action() }) {
+      Image(systemName: systemName)
+        .font(.system(size: 20, weight: .semibold))
+        .foregroundStyle(FuturistTheme.textPrimary)
+        .frame(width: 36, height: 36)
+        .background(Color.white.opacity(0.08))
+        .clipShape(Circle())
+        .overlay(
+          Circle().stroke(FuturistTheme.textPrimary.opacity(0.20), lineWidth: 1)
+        )
+    }
+    .buttonStyle(.plain)
+    .contentShape(Circle())
+  }
+}
+
 struct ParentChildWeeklyView: View {
   let childId: UUID
 
   @EnvironmentObject private var appState: AppState
 
-  // 🔹 Persist the last parent-viewed child for Assign screens
+  // 🔹 Persist the last parent-viewed child for Assign screens AND for scanning arrows
   @AppStorage("lastParentChildId") private var lastParentChildIdRaw: String?
+
+  // 🔹 Persist the parent’s last selected day ("yyyy-MM-dd")
+  @AppStorage("lastParentSelectedDay") private var lastParentSelectedDayISO: String?
 
   // Selected day
   @State private var selectedDate: Date = Date()
+
+  // One-time init gate so we don't overwrite user's selection on reappear
+  @State private var didInitializeSelectedDate = false
+
+  // 🔹 Active child for this screen (initialized from `childId` / lastParentChildIdRaw)
+  @State private var activeChildId: UUID
 
   // Sheets (Assign entry points)
   @State private var showAssignTaskSheet = false
@@ -1374,6 +1508,12 @@ struct ParentChildWeeklyView: View {
   @State private var completionToPreview: TaskCompletionRecord? = nil
   @State private var viewerTaskTitle: String = ""
 
+  // MARK: - Init
+  init(childId: UUID) {
+    self.childId = childId
+    _activeChildId = State(initialValue: childId)
+  }
+
   // MARK: - Tunables to match child screens
   private static let ruleLeadingInset: CGFloat = 16
   private static let ruleTrailingInset: CGFloat = 14
@@ -1382,6 +1522,10 @@ struct ParentChildWeeklyView: View {
   private static let headerTopPadding: CGFloat = 6
   private static let headerBottomPadding: CGFloat = 4
 
+  /// Align the arrows with the **name** line inside `ChildHeaderView`.
+  /// Positive = push arrows DOWN; tweak by a point or two if your header font changes.
+  private let arrowNameBaselineOffset: CGFloat = 10
+
   // Monday-first calendar
   private var isoCalendar: Calendar {
     var cal = Calendar(identifier: .iso8601)
@@ -1389,8 +1533,53 @@ struct ParentChildWeeklyView: View {
     return cal
   }
 
+  // ISO day-only formatter used for persistence
+  private static let isoDayFormatter: DateFormatter = {
+    let df = DateFormatter()
+    var c = Calendar(identifier: .iso8601)
+    c.timeZone = .current
+    df.calendar = c
+    df.locale = .current
+    df.timeZone = .current
+    df.dateFormat = "yyyy-MM-dd"
+    return df
+  }()
+
+  // Resolve child by activeChildId
   private var child: ChildProfile? {
-    appState.children.first { $0.id == childId }
+    appState.children.first { $0.id == activeChildId }
+  }
+
+  // Sorted order for scanning (A→Z by name)
+  private var childrenSorted: [ChildProfile] {
+    appState.children.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+  }
+  private var hasMultipleChildren: Bool { childrenSorted.count > 1 }
+  private var currentChildIndex: Int? {
+    childrenSorted.firstIndex(where: { $0.id == activeChildId })
+  }
+
+  // Scan actions with wrap-around + haptic + persistence
+  private func goPrevChild() {
+    guard hasMultipleChildren, let idx = currentChildIndex else { return }
+    let newIdx = (idx - 1 + childrenSorted.count) % childrenSorted.count
+    let newId = childrenSorted[newIdx].id
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+      activeChildId = newId
+    }
+    lastParentChildIdRaw = newId.uuidString
+  }
+
+  private func goNextChild() {
+    guard hasMultipleChildren, let idx = currentChildIndex else { return }
+    let newIdx = (idx + 1) % childrenSorted.count
+    let newId = childrenSorted[newIdx].id
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+      activeChildId = newId
+    }
+    lastParentChildIdRaw = newId.uuidString
   }
 
   private var today: Date { Date() }
@@ -1413,16 +1602,16 @@ struct ParentChildWeeklyView: View {
   }
 
   private var pointsText: String {
-    String(appState.childPointsTotal(childId: childId))
+    String(appState.childPointsTotal(childId: activeChildId))
   }
 
-  // MARK: - Data helpers
+  // MARK: - Data helpers (now bound to activeChildId)
   private var tasksForSelectedDay: [TaskAssignment] {
-    appState.assignments(for: childId, on: selectedDate)
+    appState.assignments(for: activeChildId, on: selectedDate)
   }
 
   private var eventsForSelectedDay: [EventAssignment] {
-    appState.events(for: childId, on: selectedDate)
+    appState.events(for: activeChildId, on: selectedDate)
   }
 
   private var eventIdsForSelectedDay: Set<UUID> { Set(eventsForSelectedDay.map(\.id)) }
@@ -1514,6 +1703,12 @@ struct ParentChildWeeklyView: View {
     }
   }
 
+  // MARK: - Persist last selected day (ISO yyyy-MM-dd)
+  private func persistLastSelectedDay(_ date: Date) {
+    let day = isoCalendar.startOfDay(for: date)
+    lastParentSelectedDayISO = Self.isoDayFormatter.string(from: day)
+  }
+
   // MARK: - Body
   var body: some View {
     NavigationStack {
@@ -1542,7 +1737,7 @@ struct ParentChildWeeklyView: View {
           let defaultStartDate = max(isoCalendar.startOfDay(for: selectedDate),
                                      isoCalendar.startOfDay(for: today))
           AssignTaskToChildView(
-            childId: childId,
+            childId: activeChildId,
             defaultStartDate: defaultStartDate,
             onShowWeeklyToast: { showToast($0) }
           )
@@ -1552,7 +1747,7 @@ struct ParentChildWeeklyView: View {
           let defaultStartDate = max(isoCalendar.startOfDay(for: selectedDate),
                                      isoCalendar.startOfDay(for: today))
           AssignEventToChildView(
-            childId: childId,
+            childId: activeChildId,
             defaultStartDate: defaultStartDate,
             onShowWeeklyToast: { showToast($0) }
           )
@@ -1575,9 +1770,31 @@ struct ParentChildWeeklyView: View {
         }
       }
       .onAppear {
-        // Normalize to start-of-day, and persist last viewed child for Assign tabs
-        selectedDate = isoCalendar.startOfDay(for: today)
-        lastParentChildIdRaw = childId.uuidString
+        // Initialize active child from stored value (if present/valid), else use inbound childId
+        if let raw = lastParentChildIdRaw, let stored = UUID(uuidString: raw),
+           appState.children.contains(where: { $0.id == stored }) {
+          activeChildId = stored
+        } else {
+          activeChildId = childId
+          lastParentChildIdRaw = childId.uuidString
+        }
+
+        // ✅ Initialize the selectedDate once:
+        guard !didInitializeSelectedDate else { return }
+        if let iso = lastParentSelectedDayISO,
+           let stored = Self.isoDayFormatter.date(from: iso) {
+          selectedDate = isoCalendar.startOfDay(for: stored)
+        } else {
+          selectedDate = isoCalendar.startOfDay(for: today)
+        }
+        didInitializeSelectedDate = true
+
+        // Write it out (keeps storage in sync if it was missing).
+        persistLastSelectedDay(selectedDate)
+      }
+      // 🔹 Persist whenever the parent changes the day (via strip or "Today")
+      .onChange(of: selectedDate) { _, newValue in
+        persistLastSelectedDay(newValue)
       }
       .navigationTitle("")
       .navigationBarTitleDisplayMode(.inline)
@@ -1589,10 +1806,27 @@ struct ParentChildWeeklyView: View {
   private var headerCluster: some View {
     VStack(spacing: 6) {
       if let child {
+        // Keep ChildHeaderView unchanged so gems remain where they were.
+        // Add arrows as a BOTTOM-ALIGNED overlay so they line up with the child's name,
+        // not with the gems row. Tweak `arrowNameBaselineOffset` if your name font changes.
         ChildHeaderView(
           child: child,
-          points: appState.childPointsTotal(childId: childId)
+          points: appState.childPointsTotal(childId: activeChildId)
         )
+        .overlay(alignment: .bottom) {
+          if hasMultipleChildren {
+            HStack {
+              ChildSwitchArrow(systemName: "chevron.left", action: goPrevChild)
+                .accessibilityLabel("Previous child")
+              Spacer()
+              ChildSwitchArrow(systemName: "chevron.right", action: goNextChild)
+                .accessibilityLabel("Next child")
+            }
+            // Pull the arrows *down* to the name baseline (positive pushes down)
+            .padding(.horizontal, 4)
+            .offset(y: arrowNameBaselineOffset)
+          }
+        }
       }
 
       Text(headerSelectedDayText)
@@ -1664,7 +1898,11 @@ struct ParentChildWeeklyView: View {
                         onToggleComplete: {
                           appState.toggleCompletion(assignmentId: assignment.id, on: selectedDate)
                         },
-                        onTap: { assignmentToEdit = assignment },
+                        onEdit: { assignmentToEdit = assignment },
+                        onDelete: {
+                          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                          appState.deleteTaskAssignment(id: assignment.id)
+                        },
                         onViewPhoto: {
                           guard let comp = completion, comp.hasPhotoEvidence else { return }
                           viewerTaskTitle = assignment.taskTitle
@@ -1690,12 +1928,6 @@ struct ParentChildWeeklyView: View {
                       }
                     }
                   }
-                  .onDelete { indexSet in
-                    for idx in indexSet {
-                      let a = unlinkedTasksSortedForDisplay[idx]
-                      appState.deleteTaskAssignment(id: a.id)
-                    }
-                  }
                 } header: {
                   Text(standaloneTasksSectionTitle)
                     .foregroundStyle(FuturistTheme.textPrimary)
@@ -1713,7 +1945,11 @@ struct ParentChildWeeklyView: View {
                     VStack(spacing: 0) {
                       EventAssignmentRow(
                         event: event,
-                        onTap: { eventToEdit = event },
+                        onEdit: { eventToEdit = event },
+                        onDelete: {
+                          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                          appState.deleteEventAssignment(id: event.id)
+                        },
                         headlineColor: FuturistTheme.textPrimary,
                         metaColor: FuturistTheme.textSecondary
                       )
@@ -1723,13 +1959,6 @@ struct ParentChildWeeklyView: View {
                     .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
                     .listRowSeparator(.hidden)
                     .listRowBackground(CardBackground())
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                      Button(role: .destructive) {
-                        appState.deleteEventAssignment(id: event.id)
-                      } label: {
-                        Label("Delete", systemImage: "trash")
-                      }
-                    }
                     .overlay(alignment: .bottomLeading) {
                       if index < items.count - 1 {
                         TaskRowGradientRule(
@@ -1756,7 +1985,11 @@ struct ParentChildWeeklyView: View {
                             onToggleComplete: {
                               appState.toggleCompletion(assignmentId: assignment.id, on: selectedDate)
                             },
-                            onTap: { assignmentToEdit = assignment },
+                            onEdit: { assignmentToEdit = assignment },
+                            onDelete: {
+                              UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                              appState.deleteTaskAssignment(id: assignment.id)
+                            },
                             onViewPhoto: {
                               guard let comp = completion, comp.hasPhotoEvidence else { return }
                               viewerTaskTitle = assignment.taskTitle
@@ -1772,13 +2005,6 @@ struct ParentChildWeeklyView: View {
                         .listRowInsets(EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12))
                         .listRowSeparator(.hidden)
                         .listRowBackground(CardBackground())
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                          Button(role: .destructive) {
-                            appState.deleteTaskAssignment(id: assignment.id)
-                          } label: {
-                            Label("Delete", systemImage: "trash")
-                          }
-                        }
                       }
                     }
                   }
@@ -1808,14 +2034,15 @@ struct ParentChildWeeklyView: View {
   }
 }
 
-// MARK: - Task row (PARENT) — radios match child: magenta ring / green + dark fill + white check
+// MARK: - Task row (PARENT) — centered action cluster
 private struct TaskAssignmentRow: View {
   let assignment: TaskAssignment
   let selectedDate: Date
   let isCompleted: Bool
   let completionForSelectedDay: TaskCompletionRecord?
   let onToggleComplete: () -> Void
-  let onTap: () -> Void
+  let onEdit: () -> Void
+  let onDelete: () -> Void
   let onViewPhoto: (() -> Void)?
   var headlineColor: Color = FuturistTheme.textPrimary
   var metaColor: Color = FuturistTheme.textSecondary
@@ -1836,17 +2063,17 @@ private struct TaskAssignmentRow: View {
     let checked = isCompleted
     return ZStack {
       Circle()
-        .stroke(FuturistTheme.magenta, lineWidth: 2.5) // outer ring (unchecked colour)
+        .stroke(FuturistTheme.magenta, lineWidth: 2.5)
       if checked {
         Circle()
-          .fill(Color.black.opacity(0.60)) // dark inner when checked
+          .fill(Color.black.opacity(0.60))
           .overlay(
             Image(systemName: "checkmark")
               .font(.system(size: 11, weight: .heavy))
               .foregroundStyle(.white)
           )
           .overlay(
-            Circle().stroke(FuturistTheme.green, lineWidth: 2.5) // green ring when checked
+            Circle().stroke(FuturistTheme.green, lineWidth: 2.5)
           )
       }
     }
@@ -1855,7 +2082,7 @@ private struct TaskAssignmentRow: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      HStack(alignment: .top, spacing: 12) {
+      HStack(alignment: .center, spacing: 12) {   // ⬅️ center vertically
         // Radio
         Button(action: onToggleComplete) {
           radio
@@ -1874,7 +2101,7 @@ private struct TaskAssignmentRow: View {
             if dimmed { inactiveBadge }
           }
 
-          // Meta line (points + time)
+          // Meta line (points + time + camera when required)
           HStack(spacing: 8) {
             if assignment.rewardPoints > 0 {
               HStack(spacing: 3) {
@@ -1890,4 +2117,423 @@ private struct TaskAssignmentRow: View {
                 .foregroundStyle(metaColor)
             } else if let ft = assignment.finishTime {
               Text(formatTime(ft))
-                .foregr
+                .foregroundStyle(metaColor)
+            }
+
+            if assignment.photoEvidenceRequired {
+              Image(systemName: "camera.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(metaColor)
+                .accessibilityLabel("Photo evidence required")
+            }
+          }
+          .font(.footnote)
+
+          // Helper
+          if let helper = assignment.helper, !helper.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text(helper)
+              .font(.footnote)
+              .foregroundStyle(metaColor)
+          }
+
+          // Photo evidence chip (only when a completion with photo exists)
+          if completionForSelectedDay?.hasPhotoEvidence == true {
+            Button(action: { onViewPhoto?() }) {
+              HStack(spacing: 6) {
+                Image(systemName: "photo.fill.on.rectangle.fill")
+                Text("View Photo")
+                  .fontWeight(.semibold)
+              }
+              .font(.caption)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 5)
+              .background(Color.white.opacity(0.10), in: Capsule())
+              .overlay(Capsule().stroke(Color.white.opacity(0.20)))
+            }
+            .buttonStyle(.plain)
+          }
+        }
+
+        Spacer(minLength: 8)
+
+        // Trailing actions (center vertically)
+        HStack(spacing: 10) {
+          Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onEdit()
+          } label: {
+            Text("Edit")
+              .font(.footnote.weight(.semibold))
+              .foregroundStyle(Color.white)
+              .padding(.horizontal, 10)
+              .padding(.vertical, 6)
+              .background(Color.white.opacity(0.12), in: Capsule())
+              .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Edit task")
+
+          Menu {
+            Button(role: .destructive) {
+              onDelete()
+            } label: {
+              Label("Delete", systemImage: "trash")
+            }
+          } label: {
+            Image(systemName: "ellipsis.circle")
+              .font(.title3)
+              .foregroundStyle(FuturistTheme.textSecondary)
+              .padding(.horizontal, 2)
+          }
+          .accessibilityLabel("More actions")
+        }
+        .frame(maxHeight: .infinity) // ⬅️ participate in row height for true centering
+      }
+    }
+    .contentShape(Rectangle())
+  }
+
+  private func formatTime(_ date: Date) -> String {
+    let df = DateFormatter()
+    df.dateStyle = .none
+    df.timeStyle = .short
+    return df.string(from: date)
+  }
+}
+
+// MARK: - Event row (PARENT) — centered action cluster
+private struct EventAssignmentRow: View {
+  let event: EventAssignment
+  let onEdit: () -> Void
+  let onDelete: () -> Void
+  var headlineColor: Color = FuturistTheme.textPrimary
+  var metaColor: Color = FuturistTheme.textSecondary
+
+  private var dimmed: Bool { !event.isActive }
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 12) { // already centered; keep it
+      TaskEmojiIconView(icon: event.eventIcon, size: 20)
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 8) {
+          Text(event.eventTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled Event" : event.eventTitle)
+            .font(.headline)
+            .foregroundStyle(dimmed ? metaColor.opacity(0.7) : headlineColor)
+          if dimmed {
+            Text("Inactive")
+              .font(.caption2).fontWeight(.semibold)
+              .padding(.horizontal, 8).padding(.vertical, 4)
+              .foregroundStyle(metaColor)
+              .background(Color.white.opacity(0.10), in: Capsule())
+              .overlay(Capsule().stroke(Color.white.opacity(0.20), lineWidth: 1))
+          }
+        }
+
+        HStack(spacing: 8) {
+          Text(dateLine())
+            .foregroundStyle(metaColor)
+
+          if let st = event.startTime {
+            Text(timeLine(st))
+              .foregroundStyle(metaColor)
+          } else if let ft = event.finishTime {
+            Text(timeLine(ft))
+              .foregroundStyle(metaColor)
+          }
+
+          let loc = event.locationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !loc.isEmpty {
+            Text("📍 \(loc)")
+              .foregroundStyle(metaColor)
+          }
+        }
+        .font(.footnote)
+      }
+
+      Spacer(minLength: 8)
+
+      // Trailing actions (center vertically)
+      HStack(spacing: 10) {
+        Button {
+          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+          onEdit()
+        } label: {
+          Text("Edit")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.12), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Edit event")
+
+        Menu {
+          Button(role: .destructive) {
+            onDelete()
+          } label: {
+            Label("Delete", systemImage: "trash")
+          }
+        } label: {
+          Image(systemName: "ellipsis.circle")
+            .font(.title3)
+            .foregroundStyle(FuturistTheme.textSecondary)
+            .padding(.horizontal, 2)
+        }
+        .accessibilityLabel("More actions")
+      }
+      .frame(maxHeight: .infinity) // ⬅️ ensures the cluster sits at vertical middle
+    }
+    .contentShape(Rectangle())
+  }
+
+  private func dateLine() -> String {
+    let df = DateFormatter()
+    df.dateStyle = .medium
+    df.timeStyle = .none
+    return df.string(from: event.startDate)
+  }
+
+  private func timeLine(_ date: Date) -> String {
+    let tf = DateFormatter()
+    tf.dateStyle = .none
+    tf.timeStyle = .short
+    return tf.string(from: date)
+  }
+}
+
+
+===== ./CloudKitSharingController.swift =====
+
+//
+//  CloudKitSharingController.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 10/2/2026.
+//
+
+
+import CloudKit
+import UIKit
+import SwiftUI
+
+final class CloudKitSharingController: NSObject, UICloudSharingControllerDelegate {
+    
+    private let container: CKContainer
+    private let database: CKDatabase
+    private let familyMetaRecordID: CKRecord.ID
+    
+    init(container: CKContainer = .default(),
+         database: CKDatabase,
+         familyMetaRecordID: CKRecord.ID) {
+        self.container = container
+        self.database = database
+        self.familyMetaRecordID = familyMetaRecordID
+    }
+    
+    func makeSharingController() async throws -> UICloudSharingController {
+        
+        // Fetch the FamilyMeta record
+        let record = try await database.record(for: familyMetaRecordID)
+        
+        // Attempt to grab an existing share
+        if let shareRef = record.share {
+            if let existingShare = try? await database.record(for: shareRef.recordID) as? CKShare {
+                let controller = UICloudSharingController(share: existingShare, container: container)
+                controller.delegate = self
+                return controller
+            }
+        }
+        
+        // No existing share → create one
+        let share = CKShare(rootRecord: record)
+        share[CKShare.SystemFieldKey.title] = "Family Checklist" as CKRecordValue
+        
+        // Save both together
+        _ = try await database.modifyRecords(saving: [record, share], deleting: [])
+        
+        let controller = UICloudSharingController(share: share, container: container)
+        controller.delegate = self
+        return controller
+    }
+    
+    // MARK: UICloudSharingControllerDelegate
+    func cloudSharingController(_ c: UICloudSharingController, failedToSaveShareWithError error: Error) {
+        print("❌ Failed to save share: \(error)")
+    }
+    
+    func itemTitle(for c: UICloudSharingController) -> String? {
+        return "Family Checklist"
+    }
+}
+
+===== ./EditEventTemplateView.swift =====
+
+//
+// EditEventTemplateView.swift
+// parent_child_checklist
+//
+
+import SwiftUI
+
+// MARK: - Futurist theme tokens (aligned with your other screens)
+private enum FuturistTheme {
+    static let neonAqua       = Color(red: 0.20, green: 0.95, blue: 1.00)
+    static let textPrimary    = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary  = Color.white.opacity(0.78)
+    static let cardStroke     = Color.white.opacity(0.08)
+    static let cardShadow     = Color.black.opacity(0.10)
+
+    static let surfaceSolid   = Color(red: 0.05, green: 0.10, blue: 0.22)
+    static let surfaceFrost   = Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+
+    // Header pills
+    static let softRedBase    = Color(red: 1.00, green: 0.36, blue: 0.43)
+    static let softGreenBase  = Color(red: 0.27, green: 0.89, blue: 0.54)
+    static let softRedLight   = Color(red: 1.00, green: 0.58, blue: 0.63)
+    static let softGreenLight = Color(red: 0.62, green: 0.95, blue: 0.73)
+}
+
+// MARK: - Layout metrics
+private enum PageMetrics {
+    static let pageHPad: CGFloat     = 12
+    static let innerHPad: CGFloat    = 16
+    static let cornerRadius: CGFloat = 14
+    static let fieldCorner: CGFloat  = 12
+    static let cardShadowRadius: CGFloat = 4
+    static let cardShadowYOffset: CGFloat = 1
+}
+
+// MARK: - Frosted card container
+private struct FrostedCard<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    let content: () -> Content
+    init(@ViewBuilder content: @escaping () -> Content) { self.content = content }
+
+    var body: some View {
+        let fill = reduceTransparency ? FuturistTheme.surfaceSolid : FuturistTheme.surfaceFrost
+        return VStack(alignment: .leading, spacing: 10) { content() }
+            .padding(.vertical, 12)
+            .padding(.horizontal, PageMetrics.innerHPad)
+            .background(
+                RoundedRectangle(cornerRadius: PageMetrics.cornerRadius, style: .continuous)
+                    .fill(fill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: PageMetrics.cornerRadius, style: .continuous)
+                    .stroke(FuturistTheme.cardStroke, lineWidth: 1)
+            )
+            .shadow(color: FuturistTheme.cardShadow, radius: PageMetrics.cardShadowRadius, x: 0, y: PageMetrics.cardShadowYOffset)
+    }
+}
+
+// MARK: - Bright cyan filament separator
+private struct BrightLineSeparator: View {
+    var leadingInset: CGFloat = 16
+    var trailingInset: CGFloat = 14
+    var thickness: CGFloat = 2
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.95), location: 0.00),
+                .init(color: FuturistTheme.neonAqua, location: 0.50),
+                .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.95), location: 1.00)
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(height: thickness)
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, leadingInset)
+        .padding(.trailing, trailingInset)
+        .padding(.horizontal, PageMetrics.pageHPad)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Header pill button
+private struct ToolbarPillButton: View {
+    let label: String
+    var foreground: Color
+    var background: Color
+    var stroke: Color
+    var fixedWidth: CGFloat? = 76
+    var fixedHeight: CGFloat? = 32
+    var action: () -> Void
+
+    var body: some View {
+        Text(label)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(foreground)
+            .frame(width: fixedWidth, height: fixedHeight)
+            .background(Capsule().fill(background))
+            .overlay(Capsule().stroke(stroke, lineWidth: 1))
+            .shadow(color: FuturistTheme.cardShadow, radius: 3)
+            .contentShape(Capsule())
+            .onTapGesture { action() }
+    }
+}
+
+// MARK: - Edit Event (Futurist restyle)
+struct EditEventTemplateView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let template: EventTemplate
+    var onSaved: ((EventTemplate) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
+
+    @State private var title: String
+    @State private var selectedEmoji: String
+    @State private var selectedCategory: EmojiCatalog.Category = .all
+    @State private var validationMessage: String? = nil
+    @FocusState private var titleFocused: Bool
+    @State private var showMyEmojisSheet = false
+
+    // 🔧 Square emoji tiles to avoid truncation
+    private let cell: CGFloat = 40
+    private var gridColumns: [GridItem] { [GridItem(.adaptive(minimum: cell), spacing: 10)] }
+
+    // Init state from template
+    init(template: EventTemplate,
+         onSaved: ((EventTemplate) -> Void)? = nil,
+         onCancel: (() -> Void)? = nil) {
+        self.template = template
+        self.onSaved = onSaved
+        self.onCancel = onCancel
+        _title = State(initialValue: template.title)
+        _selectedEmoji = State(initialValue: template.iconSymbol)
+    }
+
+    // Derived
+    private var trimmedTitle: String { title.trimmed }
+
+    private var isDuplicate: Bool {
+        !trimmedTitle.isEmpty && appState.isEventTitleTaken(trimmedTitle, excluding: template.id)
+    }
+
+    private var hasChanges: Bool {
+        trimmedTitle != template.title.trimmed
+        || selectedEmoji != template.iconSymbol
+    }
+
+    private var canSave: Bool {
+        !trimmedTitle.isEmpty
+        && !isDuplicate
+        && selectedEmoji.trimmed.containsEmoji
+        && hasChanges
+    }
+
+    private var baseEmojis: [String] {
+        switch selectedCategory {
+        case .myEmojis: return appState.customEmojis
+        default:        return EmojiCatalog.emojis(for: selectedCategory)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZZZBackgroundAndC

@@ -2,8 +2,9 @@
 //  SelectEventTemplateView.swift
 //  parent_child_checklist
 //
-//  Matches Select Location/Task: tall 92pt cards, neon filament separators,
-//  horizontal-only swipe rail (Edit + Delete), warn-on-use delete, and safeAreaInset header.
+//  UPDATED: Extra‑compact tiles (height 64), visible trailing actions (Edit + …)
+//  - Non-breathing layout (ScrollView + LazyVStack)
+//  - Same frosted cards, neon filament separators, and header as before
 //
 
 import SwiftUI
@@ -11,36 +12,32 @@ import UIKit
 
 // MARK: - Futurist theme tokens (parity with your other screens)
 private enum FuturistTheme {
-    static let neonAqua = Color(red: 0.20, green: 0.95, blue: 1.00)
-    static let textPrimary = Color(red: 0.92, green: 0.97, blue: 1.00)
-    static let textSecondary = Color.white.opacity(0.78)
-    static let cardStroke = Color.white.opacity(0.08)
-    static let cardShadow = Color.black.opacity(0.10)
+    static let neonAqua       = Color(red: 0.20, green: 0.95, blue: 1.00)
+    static let textPrimary    = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary  = Color.white.opacity(0.78)
+    static let cardStroke     = Color.white.opacity(0.08)
+    static let cardShadow     = Color.black.opacity(0.10)
 
-    static let softRedBase   = Color(red: 1.00, green: 0.36, blue: 0.43)
-    static let softGreenBase = Color(red: 0.27, green: 0.89, blue: 0.54)
-    static let softRedLight  = Color(red: 1.00, green: 0.58, blue: 0.63)
+    static let softRedBase    = Color(red: 1.00, green: 0.36, blue: 0.43)
+    static let softGreenBase  = Color(red: 0.27, green: 0.89, blue: 0.54)
+    static let softRedLight   = Color(red: 1.00, green: 0.58, blue: 0.63)
     static let softGreenLight = Color(red: 0.62, green: 0.95, blue: 0.73)
-
-    // Action icon colours (round Edit/Delete)
-    static let actionBlue = Color(red: 0.11, green: 0.49, blue: 1.00)
-    static let actionRed  = Color(red: 1.00, green: 0.29, blue: 0.34)
 }
 
-// MARK: - Row metrics (mirror Location)
+// MARK: - Row metrics (compact, aligned with Select Task)
 private enum EventRowMetrics {
     static let pageHPad: CGFloat     = 12
     static let cornerRadius: CGFloat = 14
     static let innerHPad: CGFloat    = 16
 
-    // Tall rows (to match Location)
-    static let rowHeight: CGFloat = 92
+    // EXTRA‑COMPACT tile height (was 92 → now 64)
+    static let rowHeight: CGFloat    = 64
 
-    // Chevron on the right
-    static let chevronSize: CGFloat = 16
-    static let chevronTint = Color.white.opacity(0.85)
+    // Chevron (kept if you want a disclosure feel; currently not shown)
+    static let chevronSize: CGFloat  = 16
+    static let chevronTint           = Color.white.opacity(0.85)
 
-    // Right inset so actions/chevron align with text
+    // Right inset so trailing actions align with content
     static let innerTrailing: CGFloat = 12
 
     // Separator-only spacing
@@ -114,7 +111,7 @@ private struct EventCompactTile<Content: View>: View {
     }
 }
 
-/// Tall tile (Event row) — 92pt height to match Location
+/// Event row tile — extra‑compact height
 private struct EventTile<Content: View>: View {
     let content: () -> Content
     init(@ViewBuilder content: @escaping () -> Content) { self.content = content }
@@ -129,145 +126,6 @@ private struct EventTile<Content: View>: View {
                     shadowRadius: 4, shadowYOffset: 1
                 )
             )
-    }
-}
-
-// MARK: - Swipe-to-reveal (content anchored left; shrink width only)
-private struct EventSwipeRevealRow<RowContent: View>: View {
-    private let rowHeight: CGFloat     = EventRowMetrics.rowHeight
-    private let circleSize: CGFloat    = 48
-    private let glyphSize: CGFloat     = 20
-    private let actionSpacing: CGFloat = 20
-    private let revealWidth: CGFloat   = 160
-
-    let id: UUID
-    @Binding var openRowId: UUID?
-    let rowContent: () -> RowContent
-    let onTapRow: () -> Void
-    let onEdit: () -> Void
-    let onDelete: () -> Void
-
-    @GestureState private var dragX: CGFloat = 0
-    private var isOpen: Bool { openRowId == id }
-
-    var body: some View {
-        GeometryReader { geo in
-            let fullWidth = geo.size.width
-            let revealed  = min(revealWidth, max(0, isOpen ? revealWidth : -dragX))
-            let railActive = revealed > 0
-
-            ZStack(alignment: .trailing) {
-                // Trailing action rail (Edit + Delete)
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    HStack(spacing: actionSpacing) {
-                        VStack(spacing: 6) {
-                            Button {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                onEdit()
-                            } label: {
-                                Circle()
-                                    .fill(FuturistTheme.actionBlue)
-                                    .frame(width: circleSize, height: circleSize)
-                                    .overlay(
-                                        Image(systemName: "pencil")
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: glyphSize, weight: .semibold))
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                            Text("Edit")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(FuturistTheme.textPrimary.opacity(0.90))
-                                .shadow(color: .black.opacity(0.35), radius: 1, x: 0, y: 1)
-                        }
-                        VStack(spacing: 6) {
-                            Button {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                onDelete()
-                            } label: {
-                                Circle()
-                                    .fill(FuturistTheme.actionRed)
-                                    .frame(width: circleSize, height: circleSize)
-                                    .overlay(
-                                        Image(systemName: "trash")
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: glyphSize, weight: .semibold))
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                            Text("Delete")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(FuturistTheme.textPrimary.opacity(0.90))
-                                .shadow(color: .black.opacity(0.35), radius: 1, x: 0, y: 1)
-                        }
-                    }
-                    .padding(.trailing, EventRowMetrics.innerTrailing)
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .frame(height: rowHeight)
-                .opacity(railActive ? 1 : 0)
-                .allowsHitTesting(railActive)
-                .zIndex(railActive ? 1 : 0)
-
-                // Foreground card — anchored left; shrink width only (no offset)
-                HStack(spacing: 0) {
-                    rowContent()
-                        .frame(width: fullWidth - revealed, alignment: .leading)
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 10, coordinateSpace: .local)
-                        .updating($dragX) { value, state, _ in
-                            state = min(0, max(-revealWidth, value.translation.width))
-                        }
-                        .onEnded { value in
-                            let finalReveal = min(revealWidth, max(0, -(value.translation.width)))
-                            let threshold = revealWidth * 0.33
-                            let shouldOpen = finalReveal > threshold
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                                openRowId = shouldOpen ? id : nil
-                            }
-                            if shouldOpen { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-                        }
-                )
-                .onTapGesture {
-                    if isOpen {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            openRowId = nil
-                        }
-                    } else {
-                        onTapRow()
-                    }
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: EventRowMetrics.cornerRadius, style: .continuous))
-        }
-        .frame(height: rowHeight)
-    }
-}
-
-// MARK: - Toolbar pill button (Close / ＋)
-private struct ToolbarPillButton: View {
-    let label: String
-    var foreground: Color
-    var background: Color
-    var stroke: Color
-    var fixedWidth: CGFloat? = nil
-    var fixedHeight: CGFloat? = nil
-    var action: () -> Void
-
-    var body: some View {
-        Text(label)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(foreground)
-            .frame(width: fixedWidth, height: fixedHeight)
-            .background(Capsule().fill(background))
-            .overlay(Capsule().stroke(stroke, lineWidth: 1))
-            .shadow(color: FuturistTheme.cardShadow, radius: 3)
-            .contentShape(Capsule())
-            .onTapGesture { action() }
     }
 }
 
@@ -353,9 +211,6 @@ struct SelectEventTemplateView: View {
     @State private var showAddTemplate = false
     @State private var editingTemplate: EventTemplate? = nil
 
-    // Swipe open tracking
-    @State private var openRowId: UUID? = nil
-
     // Delete confirm
     @State private var showDeletePrompt: Bool = false
     @State private var pendingDelete: EventTemplate? = nil
@@ -385,16 +240,15 @@ struct SelectEventTemplateView: View {
         return "This event template is currently used by \(n) \(plural). Deleting it will not remove existing assignments, but you won’t be able to use this template again. This cannot be undone."
     }
 
-    // Count how many assignments use a template (⬇️ adjust if your store names differ)
+    // Count how many assignments use a template
     private func usageCount(for templateId: UUID) -> Int {
-        return appState.eventAssignments.filter { $0.templateId == templateId }.count
+        appState.eventAssignments.filter { $0.templateId == templateId }.count
     }
 
-    // Delete confirmed (⬇️ adjust API name if needed)
+    // Delete confirmed
     private func performDeleteConfirmed() {
         guard let tpl = pendingDelete else { return }
-        _ = appState.deleteEventTemplate(id: tpl.id)   // <-- adjust if your API differs
-        if openRowId == tpl.id { openRowId = nil }
+        _ = appState.deleteEventTemplate(id: tpl.id)
         pendingDelete = nil
         pendingDeleteUsageCount = 0
         showDeletePrompt = false
@@ -447,46 +301,62 @@ struct SelectEventTemplateView: View {
                         } else {
                             LazyVStack(spacing: 0) {
                                 ForEach(Array(templates.enumerated()), id: \.element.id) { idx, tpl in
-                                    let isRailOpen = (openRowId == tpl.id)
+                                    // ---- Row tile with visible action cluster (Edit + More) ----
+                                    EventTile {
+                                        HStack(spacing: 12) {
+                                            // Icon + title
+                                            TaskEmojiIconView(icon: tpl.iconSymbol, size: 20)
 
-                                    EventSwipeRevealRow(
-                                        id: tpl.id,
-                                        openRowId: $openRowId,
-                                        rowContent: {
-                                            EventTile {
-                                                HStack(spacing: 12) {
-                                                    TaskEmojiIconView(icon: tpl.iconSymbol, size: 24)
+                                            Text(tpl.title)
+                                                .font(.headline)
+                                                .foregroundStyle(FuturistTheme.textPrimary)
+                                                .lineLimit(2)
 
-                                                    // Title only (events don’t show points)
-                                                    Text(tpl.title)
-                                                        .font(.headline)
-                                                        .foregroundStyle(FuturistTheme.textPrimary)
+                                            Spacer(minLength: 10)
 
-                                                    Spacer(minLength: 10)
-
-                                                    if !isRailOpen {
-                                                        Image(systemName: "chevron.right")
-                                                            .font(.system(size: EventRowMetrics.chevronSize, weight: .semibold))
-                                                            .foregroundStyle(EventRowMetrics.chevronTint)
-                                                    }
+                                            // Action cluster: Edit + More (Delete inside)
+                                            HStack(spacing: 10) {
+                                                Button {
+                                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                                    editingTemplate = tpl
+                                                } label: {
+                                                    Text("Edit")
+                                                        .font(.footnote.weight(.semibold))
+                                                        .foregroundStyle(Color.white)
+                                                        .padding(.horizontal, 10)
+                                                        .padding(.vertical, 5) // compact to fit 64-pt row
+                                                        .background(Color.white.opacity(0.12), in: Capsule())
+                                                        .overlay(
+                                                            Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                                                        )
                                                 }
+                                                .buttonStyle(.plain)
+                                                .accessibilityLabel("Edit event “\(tpl.title)”")
+
+                                                Menu {
+                                                    Button(role: .destructive) {
+                                                        pendingDelete = tpl
+                                                        pendingDeleteUsageCount = usageCount(for: tpl.id)
+                                                        showDeletePrompt = true
+                                                    } label: {
+                                                        Label("Delete", systemImage: "trash")
+                                                    }
+                                                } label: {
+                                                    Image(systemName: "ellipsis.circle")
+                                                        .font(.title3)
+                                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                                        .padding(.horizontal, 2)
+                                                }
+                                                .accessibilityLabel("More actions for “\(tpl.title)”")
                                             }
-                                        },
-                                        onTapRow: {
+                                        }
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            // Tap anywhere on the tile (except buttons) selects the template
                                             onPick(tpl)
                                             dismiss()
-                                        },
-                                        onEdit: {
-                                            withAnimation { openRowId = nil }
-                                            editingTemplate = tpl
-                                        },
-                                        onDelete: {
-                                            withAnimation { openRowId = nil }
-                                            pendingDelete = tpl
-                                            pendingDeleteUsageCount = usageCount(for: tpl.id)
-                                            showDeletePrompt = true
                                         }
-                                    )
+                                    }
                                     .padding(.horizontal, EventRowMetrics.pageHPad)
                                     .padding(.top, idx == 0 ? EventRowMetrics.firstRowTopPad
                                                             : EventRowMetrics.betweenRowsTopPad)

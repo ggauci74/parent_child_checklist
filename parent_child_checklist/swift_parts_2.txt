@@ -1,379 +1,228 @@
-oundStyle(metaColor)
-            }
-          }
-          .font(.footnote)
-
-          // Helper
-          if let helper = assignment.helper, !helper.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Text(helper)
-              .font(.footnote)
-              .foregroundStyle(metaColor)
-          }
-
-          // Photo evidence chip
-          if completionForSelectedDay?.hasPhotoEvidence == true {
-            Button(action: { onViewPhoto?() }) {
-              HStack(spacing: 6) {
-                Image(systemName: "photo.fill.on.rectangle.fill")
-                Text("View Photo")
-                  .fontWeight(.semibold)
-              }
-              .font(.caption)
-              .padding(.horizontal, 8)
-              .padding(.vertical, 5)
-              .background(Color.white.opacity(0.10), in: Capsule())
-              .overlay(Capsule().stroke(Color.white.opacity(0.20)))
-            }
-            .buttonStyle(.plain)
-          }
-        }
-
-        Spacer(minLength: 8)
-
-        // Edit chevron
-        Image(systemName: "chevron.right")
-          .foregroundStyle(FuturistTheme.textSecondary)
-          .onTapGesture { onTap() }
-      }
-    }
-    .contentShape(Rectangle())
-    .onTapGesture { onTap() }
-  }
-
-  private func formatTime(_ date: Date) -> String {
-    let df = DateFormatter()
-    df.dateStyle = .none
-    df.timeStyle = .short
-    return df.string(from: date)
-  }
-}
-
-// MARK: - Event row (PARENT)
-private struct EventAssignmentRow: View {
-  let event: EventAssignment
-  let onTap: () -> Void
-  var headlineColor: Color = FuturistTheme.textPrimary
-  var metaColor: Color = FuturistTheme.textSecondary
-
-  private var dimmed: Bool { !event.isActive }
-
-  var body: some View {
-    HStack(alignment: .center, spacing: 12) {
-      TaskEmojiIconView(icon: event.eventIcon, size: 20)
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: 8) {
-          Text(event.eventTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled Event" : event.eventTitle)
-            .font(.headline)
-            .foregroundStyle(dimmed ? metaColor.opacity(0.7) : headlineColor)
-          if dimmed {
-            Text("Inactive")
-              .font(.caption2).fontWeight(.semibold)
-              .padding(.horizontal, 8).padding(.vertical, 4)
-              .foregroundStyle(metaColor)
-              .background(Color.white.opacity(0.10), in: Capsule())
-              .overlay(Capsule().stroke(Color.white.opacity(0.20), lineWidth: 1))
-          }
-        }
-
-        HStack(spacing: 8) {
-          Text(dateLine())
-            .foregroundStyle(metaColor)
-
-          if let st = event.startTime {
-            Text(timeLine(st))
-              .foregroundStyle(metaColor)
-          } else if let ft = event.finishTime {
-            Text(timeLine(ft))
-              .foregroundStyle(metaColor)
-          }
-
-          let loc = event.locationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
-          if !loc.isEmpty {
-            Text("📍 \(loc)")
-              .foregroundStyle(metaColor)
-          }
-        }
-        .font(.footnote)
-      }
-
-      Spacer(minLength: 8)
-
-      Image(systemName: "chevron.right")
-        .foregroundStyle(FuturistTheme.textSecondary)
-        .onTapGesture { onTap() }
-    }
-    .contentShape(Rectangle())
-    .onTapGesture { onTap() }
-  }
-
-  private func dateLine() -> String {
-    let df = DateFormatter()
-    df.dateStyle = .medium
-    df.timeStyle = .none
-    return df.string(from: event.startDate)
-  }
-
-  private func timeLine(_ date: Date) -> String {
-    let tf = DateFormatter()
-    tf.dateStyle = .none
-    tf.timeStyle = .short
-    return tf.string(from: date)
-  }
-}
-
-
-===== ./CloudKitSharingController.swift =====
-
-//
-//  CloudKitSharingController.swift
-//  parent_child_checklist
-//
-//  Created by George Gauci on 10/2/2026.
-//
-
-
-import CloudKit
-import UIKit
-import SwiftUI
-
-final class CloudKitSharingController: NSObject, UICloudSharingControllerDelegate {
-    
-    private let container: CKContainer
-    private let database: CKDatabase
-    private let familyMetaRecordID: CKRecord.ID
-    
-    init(container: CKContainer = .default(),
-         database: CKDatabase,
-         familyMetaRecordID: CKRecord.ID) {
-        self.container = container
-        self.database = database
-        self.familyMetaRecordID = familyMetaRecordID
-    }
-    
-    func makeSharingController() async throws -> UICloudSharingController {
-        
-        // Fetch the FamilyMeta record
-        let record = try await database.record(for: familyMetaRecordID)
-        
-        // Attempt to grab an existing share
-        if let shareRef = record.share {
-            if let existingShare = try? await database.record(for: shareRef.recordID) as? CKShare {
-                let controller = UICloudSharingController(share: existingShare, container: container)
-                controller.delegate = self
-                return controller
-            }
-        }
-        
-        // No existing share → create one
-        let share = CKShare(rootRecord: record)
-        share[CKShare.SystemFieldKey.title] = "Family Checklist" as CKRecordValue
-        
-        // Save both together
-        _ = try await database.modifyRecords(saving: [record, share], deleting: [])
-        
-        let controller = UICloudSharingController(share: share, container: container)
-        controller.delegate = self
-        return controller
-    }
-    
-    // MARK: UICloudSharingControllerDelegate
-    func cloudSharingController(_ c: UICloudSharingController, failedToSaveShareWithError error: Error) {
-        print("❌ Failed to save share: \(error)")
-    }
-    
-    func itemTitle(for c: UICloudSharingController) -> String? {
-        return "Family Checklist"
-    }
-}
-
-===== ./EditEventTemplateView.swift =====
-
-//
-// EditEventTemplateView.swift
-// parent_child_checklist
-//
-
-import SwiftUI
-
-struct EditEventTemplateView: View {
-    @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
-
-    let template: EventTemplate
-
-    // NEW: Callbacks so the presenting view (e.g., SelectEventTemplateView) can react
-    var onSaved: ((EventTemplate) -> Void)? = nil
-    var onCancel: (() -> Void)? = nil
-
-    @State private var title: String
-    @State private var selectedEmoji: String
-    @State private var selectedCategory: EmojiCatalog.Category = .all
-    @State private var validationMessage: String? = nil
-    @FocusState private var titleFocused: Bool
-    @State private var showMyEmojisSheet = false
-
-    private let gridColumns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 10), count: 8)
-
-    /// Keep the original convenience while allowing callbacks.
-    init(template: EventTemplate,
-         onSaved: ((EventTemplate) -> Void)? = nil,
-         onCancel: (() -> Void)? = nil) {
-        self.template = template
-        self.onSaved = onSaved
-        self.onCancel = onCancel
-        _title = State(initialValue: template.title)
-        _selectedEmoji = State(initialValue: template.iconSymbol)
-    }
-
-    private var trimmedTitle: String { title.trimmed }
-
-    private var isDuplicate: Bool {
-        !trimmedTitle.isEmpty && appState.isEventTitleTaken(trimmedTitle, excluding: template.id)
-    }
-
-    private var hasChanges: Bool {
-        trimmedTitle != template.title.trimmed
-        || selectedEmoji != template.iconSymbol
-    }
-
-    private var canSave: Bool {
-        !trimmedTitle.isEmpty
-        && !isDuplicate
-        && selectedEmoji.trimmed.containsEmoji
-        && hasChanges
-    }
-
-    private var baseEmojis: [String] {
-        switch selectedCategory {
-        case .myEmojis:
-            return appState.customEmojis
-        default:
-            return EmojiCatalog.emojis(for: selectedCategory)
+ontent
         }
     }
 
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Event") {
-                    TextField("Title", text: $title)
-                        .focused($titleFocused)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled(true)
+    // Extracted for readability
+    private var ZZZBackgroundAndContent: some View {
+        ZStack(alignment: .top) {
+            CurvyAquaBlueBackground(animate: true)
+                .ignoresSafeArea()
 
-                    if isDuplicate {
-                        Text("That event already exists. Please choose a different name.")
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    } else if let validationMessage {
-                        Text(validationMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    }
-                }
+            ScrollView {
+                VStack(spacing: 0) {
 
-                Section("Icon (Emoji)") {
-                    HStack {
-                        Text("Selected")
-                        Spacer()
-                        Text(selectedEmoji.trimmed.containsEmoji ? selectedEmoji : "✅")
-                            .font(.system(size: 32))
-                    }
+                    // ===== Event Title =====
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Event")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(FuturistTheme.textSecondary)
 
-                    Picker("Category", selection: $selectedCategory) {
-                        ForEach(EmojiCatalog.Category.allCases) { cat in
-                            Text(cat.rawValue).tag(cat)
-                        }
-                    }
+                            TextField("Title", text: $title)
+                                .textInputAutocapitalization(.words)
+                                .autocorrectionDisabled(true)
+                                .focused($titleFocused)
+                                .foregroundStyle(FuturistTheme.textPrimary)
+                                .padding(10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: PageMetrics.fieldCorner, style: .continuous)
+                                        .fill(Color.white.opacity(0.06))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: PageMetrics.fieldCorner, style: .continuous)
+                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                )
 
-                    // Grid (no text search)
-                    ScrollView {
-                        LazyVGrid(columns: gridColumns, spacing: 10) {
-                            ForEach(baseEmojis, id: \.self) { emoji in
-                                Button {
-                                    selectedEmoji = emoji
-                                    validationMessage = nil
-                                } label: {
-                                    Text(emoji)
-                                        .font(.system(size: 24))
-                                        .frame(maxWidth: .infinity, minHeight: 36)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                                .fill(selectedEmoji == emoji ? Color.blue.opacity(0.18) : Color.clear)
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                                .stroke(
-                                                    selectedEmoji == emoji ? Color.blue : Color.secondary.opacity(0.25),
-                                                    lineWidth: selectedEmoji == emoji ? 2 : 1
-                                                )
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(emoji)
+                            if isDuplicate {
+                                Text("That event already exists. Please choose a different name.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                            } else if let validationMessage {
+                                Text(validationMessage)
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
                             }
                         }
-                        .padding(.vertical, 4)
+                        .foregroundStyle(FuturistTheme.textPrimary)
                     }
-                    .frame(minHeight: 240, maxHeight: 360)
-                    .scrollIndicators(.visible)
+                    .padding(.horizontal, PageMetrics.pageHPad)
+                    .padding(.top, 12)
 
-                    if selectedCategory == .myEmojis, appState.customEmojis.isEmpty {
-                        Text("No saved emojis yet. Tap “Manage My Emojis” below to add some.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .navigationTitle("Edit Event")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        onCancel?()
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .disabled(!canSave)
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 0) {
-                    Divider()
-                    Button {
-                        showMyEmojisSheet = true
-                    } label: {
-                        HStack {
-                            Text("Manage My Emojis")
-                                .fontWeight(.semibold)
-                            Spacer()
-                            Image(systemName: "chevron.up")
-                                .foregroundStyle(.secondary)
+                    BrightLineSeparator()
+
+                    // ===== Icon (Emoji) =====
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Icon (Emoji)")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(FuturistTheme.textSecondary)
+
+                            // Selected row
+                            HStack {
+                                Text("Selected")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                Spacer()
+                                Text(selectedEmoji.trimmed.containsEmoji ? selectedEmoji : "✅")
+                                    .font(.system(size: 32))
+                            }
+
+                            // Category row
+                            HStack {
+                                Text("Category")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                Spacer()
+                                Picker("Category", selection: $selectedCategory) {
+                                    ForEach(EmojiCatalog.Category.allCases) { cat in
+                                        Text(cat.rawValue).tag(cat)
+                                    }
+                                }
+                                .labelsHidden()
+                                .tint(FuturistTheme.neonAqua)
+                            }
+
+                            // Emoji grid — square tiles; centered glyph; neon outline on selection
+                            ScrollView {
+                                LazyVGrid(columns: gridColumns, spacing: 10) {
+                                    ForEach(baseEmojis, id: \.self) { emoji in
+                                        Button {
+                                            selectedEmoji = emoji
+                                            validationMessage = nil
+                                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                        } label: {
+                                            ZStack {
+                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                    .fill(selectedEmoji == emoji ? Color.white.opacity(0.06) : Color.clear)
+
+                                                Text(emoji)
+                                                    .font(.system(size: 27))
+                                                    .frame(width: cell, height: cell, alignment: .center)
+                                                    .lineLimit(1)
+                                                    .minimumScaleFactor(1.0)
+                                                    .contentShape(Rectangle())
+                                            }
+                                            .frame(width: cell, height: cell)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                    .stroke(
+                                                        selectedEmoji == emoji ? FuturistTheme.neonAqua
+                                                                                : Color.white.opacity(0.20),
+                                                        lineWidth: selectedEmoji == emoji ? 2 : 1
+                                                    )
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel(emoji)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .frame(minHeight: 240, maxHeight: 360)
+                            .scrollIndicators(.visible)
+
+                            if selectedCategory == .myEmojis, appState.customEmojis.isEmpty {
+                                Text("No saved emojis yet. Tap “Manage My Emojis” below to add some.")
+                                    .font(.footnote)
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                            }
                         }
-                        .padding(.vertical, 12)
-                        .padding(.horizontal)
+                        .foregroundStyle(FuturistTheme.textPrimary)
                     }
-                    .buttonStyle(.plain)
-                    .background(.ultraThinMaterial)
+                    .padding(.horizontal, PageMetrics.pageHPad)
+
+                    BrightLineSeparator()
+
+                    // ===== Manage My Emojis footer =====
+                    FrostedCard {
+                        Button {
+                            showMyEmojisSheet = true
+                        } label: {
+                            HStack {
+                                Text("Manage My Emojis")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                Spacer()
+                                Image(systemName: "chevron.up")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, PageMetrics.pageHPad)
+
+                    Spacer(minLength: 24)
                 }
+                .padding(.bottom, 24)
             }
-            .sheet(isPresented: $showMyEmojisSheet) {
-                CustomEmojiLibraryView { picked in
-                    selectedEmoji = picked
-                    selectedCategory = .myEmojis
-                }
-                .environmentObject(appState)
+
+            // My Emojis sheet
+            if showMyEmojisSheet {
+                EmptyView()
             }
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    titleFocused = true
-                }
-            }
-            .onChange(of: title) { _, _ in validationMessage = nil }
         }
+        // Hide system nav; themed header below
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+
+        // Header (Cancel / title / Save) — Save is soft‑green with black text
+        .safeAreaInset(edge: .top, spacing: 0) {
+            let topSpacer: CGFloat = 8
+            ZStack {
+                Text("Edit Event")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: topSpacer)
+                    HStack {
+                        ToolbarPillButton(
+                            label: "Cancel",
+                            foreground: .white,
+                            background: FuturistTheme.softRedLight,
+                            stroke: FuturistTheme.softRedBase.opacity(0.75),
+                            action: {
+                                onCancel?()
+                                dismiss()
+                            }
+                        )
+
+                        Spacer()
+
+                        ToolbarPillButton(
+                            label: "Save",
+                            foreground: Color.black.opacity(0.9),
+                            background: FuturistTheme.softGreenLight,
+                            stroke: FuturistTheme.softGreenBase.opacity(0.75),
+                            action: { save() }
+                        )
+                        .opacity(canSave ? 1.0 : 0.45)
+                        .allowsHitTesting(canSave)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                }
+            }
+            .background(Color.clear)
+        }
+
+        .sheet(isPresented: $showMyEmojisSheet) {
+            CustomEmojiLibraryView { picked in
+                selectedEmoji = picked
+                selectedCategory = .myEmojis
+            }
+            .environmentObject(appState)
+        }
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                titleFocused = true
+            }
+        }
+        .onChange(of: title) { _, _ in validationMessage = nil }
     }
 
+    // MARK: - Save action (business logic unchanged)
     private func save() {
         validationMessage = nil
 
@@ -397,13 +246,14 @@ struct EditEventTemplateView: View {
         )
 
         if ok {
-            // Fetch updated from AppState and pass it back to the presenter
             if let updated = appState.eventTemplates.first(where: { $0.id == template.id }) {
                 onSaved?(updated)
             }
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
             dismiss()
         } else {
             validationMessage = "Couldn’t save changes. Try again."
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
         }
     }
 }
@@ -693,7 +543,7 @@ private struct ValueChip: View {
     }
 }
 
-// MARK: - Assign-To (PUSH) destination
+// MARK: - Assign-To (PUSH) destination — Futurist restyle (multi-select)
 private struct AssignToPickerScreen: View {
     let allChildren: [ChildProfile]
     let preselected: Set<UUID>
@@ -701,39 +551,217 @@ private struct AssignToPickerScreen: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var working: Set<UUID> = []
+    @State private var query: String = ""
+
+    private var filteredChildren: [ChildProfile] {
+        let base = allChildren.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return base }
+        return base.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var canApply: Bool { !working.isEmpty }
 
     var body: some View {
-        List {
-            ForEach(allChildren) { child in
-                Button {
-                    if working.contains(child.id) { working.remove(child.id) }
-                    else { working.insert(child.id) }
-                } label: {
-                    HStack(spacing: 12) {
-                        ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 32)
-                        Text(child.name)
-                        Spacer()
-                        Image(systemName: working.contains(child.id) ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(working.contains(child.id) ? Color.accentColor : Color.secondary)
+        ZStack(alignment: .top) {
+            // Background
+            CurvyAquaBlueBackground(animate: true)
+                .ignoresSafeArea()
+
+            // Content
+            ScrollView {
+                VStack(spacing: 0) {
+
+                    // Search
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Search")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                            HStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                TextField("Find a child…", text: $query)
+                                    .textInputAutocapitalization(.words)
+                                    .autocorrectionDisabled(true)
+                                    .foregroundStyle(FuturistTheme.textPrimary)
+                            }
+                            .padding(10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                        }
+                        .foregroundStyle(FuturistTheme.textPrimary)
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+
+                    BrightLineSeparator()
+
+                    // Children list (as a single frosted card with rows)
+                    FrostedCard {
+                        VStack(spacing: 0) {
+                            ForEach(filteredChildren) { child in
+                                Button {
+                                    toggle(child.id)
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        ChildAvatarCircleView(
+                                            colorHex: child.colorHex,
+                                            avatarId: child.avatarId,
+                                            size: 32
+                                        )
+
+                                        Text(child.name)
+                                            .foregroundStyle(FuturistTheme.textPrimary)
+                                            .lineLimit(1)
+
+                                        Spacer()
+
+                                        // Selection indicator
+                                        Image(systemName: working.contains(child.id) ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(
+                                                working.contains(child.id) ? FuturistTheme.neonAqua : Color.white.opacity(0.45)
+                                            )
+                                            .accessibilityHidden(true)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(working.contains(child.id) ? Color.white.opacity(0.06) : Color.clear)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(child.name), \(working.contains(child.id) ? "selected" : "not selected")")
+
+                                // Row divider (subtle)
+                                if child.id != filteredChildren.last?.id {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.08))
+                                        .frame(height: 1)
+                                        .padding(.leading, 46) // align under avatar
+                                        .accessibilityHidden(true)
+                                }
+                            }
+
+                            if filteredChildren.isEmpty {
+                                Text("No matches")
+                                    .font(.footnote)
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    BrightLineSeparator()
+
+                    // Select All / Clear All
+                    FrostedCard {
+                        HStack(spacing: 12) {
+                            Button {
+                                working = Set(allChildren.map(\.id))
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Select All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                working.removeAll()
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Clear All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Spacer()
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    Spacer(minLength: 24)
                 }
-                .buttonStyle(.plain)
+                .padding(.bottom, 24)
             }
         }
-        .navigationTitle("Choose Children")
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarLeading) {
-                Button("Select All") { working = Set(allChildren.map(\.id)) }
-                Button("Clear All") { working.removeAll() }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") {
-                    onApply(working)
-                    dismiss()
+        // Hide system nav; themed top bar below
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+
+        // Top bar with Cancel / Apply pills
+        .safeAreaInset(edge: .top, spacing: 0) {
+            let pillWidth: CGFloat = 76
+            let pillHeight: CGFloat = 32
+
+            ZStack {
+                Text("Assign To")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+
+                HStack {
+                    ToolbarPillButton(
+                        label: "Cancel",
+                        foreground: .white,
+                        background: FuturistTheme.softRedLight,
+                        stroke: FuturistTheme.softRedBase.opacity(0.75),
+                        fixedWidth: pillWidth,
+                        fixedHeight: pillHeight,
+                        action: { dismiss() }
+                    )
+
+                    Spacer(minLength: 12)
+
+                    ToolbarPillButton(
+                        label: "Apply",
+                        foreground: canApply ? Color.black.opacity(0.9) : FuturistTheme.textSecondary,
+                        background: canApply ? FuturistTheme.softGreenLight : Color.clear,
+                        stroke: canApply ? FuturistTheme.softGreenBase.opacity(0.75)
+                                         : FuturistTheme.textSecondary.opacity(0.35),
+                        disabled: !canApply,
+                        glow: canApply,
+                        fixedWidth: pillWidth,
+                        fixedHeight: pillHeight,
+                        action: {
+                            guard canApply else { return }
+                            onApply(working)
+                            dismiss()
+                        }
+                    )
                 }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
+            .background(Color.clear)
         }
         .onAppear { working = preselected }
+    }
+
+    private func toggle(_ id: UUID) {
+        if working.contains(id) { working.remove(id) } else { working.insert(id) }
     }
 }
 
@@ -799,6 +827,11 @@ struct AssignTaskToChildView: View {
 
     // Toast
     @State private var localToastMessage: String? = nil
+
+    // ⬇️ NEW: Backups for segmented control appearance (scoped to this screen)
+    @State private var prevSegTitleAttrsNormal: [NSAttributedString.Key: Any]?
+    @State private var prevSegTitleAttrsSelected: [NSAttributedString.Key: Any]?
+    @State private var prevSelectedTintColor: UIColor?
 
     // Init
     init(childId: UUID, defaultStartDate: Date, onShowWeeklyToast: ((String) -> Void)? = nil) {
@@ -1172,6 +1205,42 @@ struct AssignTaskToChildView: View {
                     preselected: selectedChildIds,
                     onApply: { newSelection in selectedChildIds = newSelection }
                 )
+            }
+
+            // ⬇️ NEW: Scoped UISegmentedControl styling for higher-contrast unselected labels
+            .onAppear {
+                // Backup current appearance so other screens remain unaffected
+                prevSegTitleAttrsNormal = UISegmentedControl.appearance().titleTextAttributes(for: .normal)
+                prevSegTitleAttrsSelected = UISegmentedControl.appearance().titleTextAttributes(for: .selected)
+                prevSelectedTintColor = UISegmentedControl.appearance().selectedSegmentTintColor
+
+                // Selected segment: dark text on white pill (semibold for readability)
+                let selectedTitleAttrs: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: UIColor(Color(red: 0.08, green: 0.14, blue: 0.24)),
+                    .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
+                ]
+
+                // Unselected segment: brighten to ~96% white, semibold for legibility on dark glass
+                let normalTitleAttrs: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: UIColor(FuturistTheme.textPrimary.opacity(0.96)),
+                    .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
+                ]
+
+                UISegmentedControl.appearance().setTitleTextAttributes(normalTitleAttrs, for: .normal)
+                UISegmentedControl.appearance().setTitleTextAttributes(selectedTitleAttrs, for: .selected)
+                UISegmentedControl.appearance().selectedSegmentTintColor = .white
+            }
+            .onDisappear {
+                // Restore prior appearance to avoid impacting other screens
+                if let prev = prevSegTitleAttrsNormal {
+                    UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .normal)
+                }
+                if let prev = prevSegTitleAttrsSelected {
+                    UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .selected)
+                }
+                if let prev = prevSelectedTintColor {
+                    UISegmentedControl.appearance().selectedSegmentTintColor = prev
+                }
             }
         }
     }
@@ -1874,4 +1943,389 @@ struct AddChildView: View {
                         .foregroundStyle(.secondary)
 
                     LazyVGrid(columns: colorGridColumns, spacing: 10) {
-                        ForEac
+                        ForEach(swatchHexes, id: \.self) { hex in
+                            Button {
+                                colorHex = hex
+                            } label: {
+                                Circle()
+                                    .fill(Color(hex: hex))
+                                    .frame(width: 30, height: 30)
+                                    .overlay(
+                                        Circle().strokeBorder(
+                                            colorHex == hex ? Color.primary : Color.secondary.opacity(0.25),
+                                            lineWidth: colorHex == hex ? 3 : 1
+                                        )
+                                    )
+                                    .shadow(color: .black.opacity(hex == "#FFFFFF" ? 0.10 : 0.0), radius: 2)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(createdChild != nil)
+                            .accessibilityLabel("Colour swatch \(hex)")
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                // Avatar status is child-controlled
+                Section("Avatar") {
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text("Not chosen yet")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("Your child will choose their avatar on their device. It will appear here automatically once selected.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let createdChild {
+                    Section("Created") {
+                        HStack {
+                            Text("Name")
+                            Spacer()
+                            Text(createdChild.name)
+                                .fontWeight(.semibold)
+                        }
+
+                        HStack {
+                            Text("Colour")
+                            Spacer()
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(hex: createdChild.colorHex))
+                                .frame(width: 36, height: 18)
+                        }
+
+                        HStack {
+                            Text("Avatar")
+                            Spacer()
+                            Text("Not chosen yet")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text("On the child’s phone: choose “I’m a Child”, select their name, then choose an avatar.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Add Child")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    nameFieldFocused = true
+                }
+            }
+            .onChange(of: name) { _, _ in
+                validationMessage = nil
+            }
+            // pinned bottom button (no scrolling needed)
+            .safeAreaInset(edge: .bottom) {
+                bottomActionBar
+            }
+        }
+    }
+
+    // MARK: - Pinned Action Bar
+    private var bottomActionBar: some View {
+        VStack(spacing: 10) {
+            if createdChild == nil, let validationMessage {
+                Text(validationMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Button {
+                if createdChild == nil {
+                    create()
+                } else {
+                    dismiss()
+                }
+            } label: {
+                Text(createdChild == nil ? "Create Child" : "Done")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(createdChild == nil ? !canCreate : false)
+        }
+        .padding(.horizontal)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
+        .background(.ultraThinMaterial)
+        .overlay(Divider(), alignment: .top)
+    }
+
+    // MARK: - Create
+    private func create() {
+        validationMessage = nil
+
+        guard !trimmedName.isEmpty else {
+            validationMessage = "Please enter a name."
+            return
+        }
+        guard !isDuplicateName else {
+            validationMessage = "That name already exists. Please choose a different name."
+            return
+        }
+
+        if let child = appState.createChild(name: trimmedName, colorHex: colorHex) {
+            createdChild = child
+            nameFieldFocused = false
+        } else {
+            validationMessage = "Couldn’t create child. Please check the details and try again."
+        }
+    }
+}
+
+
+===== ./DeepAquaElectricBlueBackground.swift =====
+
+//
+//  DeepAquaElectricBlueBackground.swift
+//  parent_child_checklist
+//
+//  Created by George Gauci on 26/2/2026.
+//
+
+
+import SwiftUI
+
+struct DeepAquaElectricBlueBackground: View {
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(colors: [
+                Color(red: 0.00, green: 0.55, blue: 0.75),   // deep aqua
+                Color(red: 0.00, green: 0.70, blue: 1.00),   // vivid aqua-blue
+                Color(red: 0.00, green: 0.40, blue: 1.00)    // electric blue
+            ]),
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+    }
+}
+
+
+===== ./EditEventAssignmentView.swift =====
+
+import SwiftUI
+import UIKit
+
+// MARK: - Futurist theme (shared with Edit/Assign Task)
+private enum FuturistTheme {
+    static let skyTop     = Color(red: 0.02, green: 0.06, blue: 0.16)   // deep navy
+    static let skyBottom  = Color(red: 0.01, green: 0.03, blue: 0.10)
+    static let neonAqua   = Color(red: 0.20, green: 0.95, blue: 1.00)   // bright cyan
+
+    static let textPrimary   = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary = Color.white.opacity(0.78)
+    static let chipBorder    = Color.white.opacity(0.25)
+    static let chipDisabled  = Color.white.opacity(0.55)
+    static let cardStroke    = Color.white.opacity(0.08)
+    static let divider       = Color.white.opacity(0.10)
+    static let cardShadow    = Color.black.opacity(0.10)
+
+    static let softRedBase    = Color(red: 1.00, green: 0.36, blue: 0.43)
+    static let softGreenBase  = Color(red: 0.27, green: 0.89, blue: 0.54)
+    static let softRedLight   = Color(red: 1.00, green: 0.58, blue: 0.63)
+    static let softGreenLight = Color(red: 0.62, green: 0.95, blue: 0.73)
+}
+
+// MARK: - Frosted card + filament
+private struct FrostedCard<Content: View>: View {
+    let content: Content
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private var surface: some ShapeStyle {
+        reduceTransparency ? Color(red: 0.05, green: 0.10, blue: 0.22)
+                           : Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) { content }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .background(surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(FuturistTheme.cardStroke, lineWidth: 1))
+            .shadow(color: FuturistTheme.cardShadow, radius: 6, x: 0, y: 2)
+    }
+}
+
+private struct BrightLineSeparator: View {
+    var leadingInset: CGFloat = 16
+    var trailingInset: CGFloat = 14
+    var thickness: CGFloat = 2
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 0.00),
+                .init(color: FuturistTheme.neonAqua,             location: 0.50),
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 1.00),
+            ]),
+            startPoint: .leading, endPoint: .trailing
+        )
+        .frame(height: thickness)
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, leadingInset)
+        .padding(.trailing, trailingInset)
+        .padding(.horizontal, 12)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Top bar (“Edit Event”) + pills
+private struct ToolbarPillButton: View {
+    let label: String
+    var foreground: Color
+    var background: Color
+    var stroke: Color
+    var disabled: Bool = false
+    var glow: Bool = false
+    var width: CGFloat = 76
+    var height: CGFloat = 32
+    var action: () -> Void
+    var body: some View {
+        Text(label)
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.9)
+            .foregroundStyle(foreground)
+            .frame(width: width, height: height)
+            .background(Capsule().fill(background))
+            .overlay(Capsule().stroke(stroke, lineWidth: 1))
+            .shadow(color: glow ? background.opacity(0.28) : .clear, radius: glow ? 3 : 0)
+            .opacity(disabled ? 0.75 : 1)
+            .contentShape(Capsule())
+            .onTapGesture { if !disabled { action() } }
+            .accessibilityAddTraits(.isButton)
+    }
+}
+
+private struct EditEventTopBar: View {
+    let canSave: Bool
+    let onCancel: () -> Void
+    let onSave: () -> Void
+    var body: some View {
+        ZStack {
+            Text("Edit Event")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(FuturistTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .accessibilityAddTraits(.isHeader)
+            HStack {
+                ToolbarPillButton(
+                    label: "Cancel",
+                    foreground: .white,
+                    background: FuturistTheme.softRedLight,
+                    stroke: FuturistTheme.softRedBase.opacity(0.75),
+                    action: onCancel
+                )
+                Spacer(minLength: 12)
+                ToolbarPillButton(
+                    label: "Save",
+                    foreground: canSave ? Color.black.opacity(0.9) : FuturistTheme.textSecondary,
+                    background: canSave ? FuturistTheme.softGreenLight : Color.clear,
+                    stroke: canSave ? FuturistTheme.softGreenBase.opacity(0.75)
+                                    : FuturistTheme.textSecondary.opacity(0.35),
+                    disabled: !canSave,
+                    glow: canSave,
+                    action: onSave
+                )
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .background(Color.clear)
+    }
+}
+
+// MARK: - Controls (toggle, chips)
+private struct NeonOutlineToggleStyle: ToggleStyle {
+    var onTint: Color = FuturistTheme.neonAqua
+    var offStroke: Color = FuturistTheme.neonAqua.opacity(0.70)
+    var offFill: Color = Color.white.opacity(0.10)
+    var knobColor: Color = .white
+    func makeBody(configuration: Configuration) -> some View {
+        let isOn = configuration.isOn
+        Button {
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.9)) { configuration.isOn.toggle() }
+        } label: {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isOn ? onTint : offFill)
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(isOn ? Color.clear : offStroke, lineWidth: 1.6))
+                    .frame(width: 50, height: 30)
+                Circle()
+                    .fill(knobColor)
+                    .shadow(color: .black.opacity(0.25), radius: 1, x: 0, y: 1)
+                    .frame(width: 24, height: 24)
+                    .padding(3)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Toggle"))
+        .accessibilityValue(Text(isOn ? "On" : "Off"))
+    }
+}
+
+private struct ToggleRow: View {
+    let title: String
+    @Binding var isOn: Bool
+    var titleColor: Color = FuturistTheme.textPrimary
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title).foregroundStyle(titleColor)
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(NeonOutlineToggleStyle())
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(title))
+        .accessibilityValue(isOn ? Text("On") : Text("Off"))
+    }
+}
+
+private struct ValueChip: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(FuturistTheme.textPrimary)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color.white.opacity(0.10), in: Capsule())
+            .overlay(Capsule().stroke(FuturistTheme.cardStroke, lineWidth: 1))
+    }
+}
+
+// MARK: - Picker chrome (dark scheme + neon tint)
+private struct PickerChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .environment(\.colorScheme, .dark)
+            .tint(FuturistTheme.neonAqua)
+    }
+}
+private extension View { func pickerChrome() -> some View { modifier(PickerChrome()) } }
+
+private struct InlineGraphicalCalendar: View {
+    let label: String
+    @Binding var date: Date
+    let range: PartialRangeFrom<Date>
+    var body: some View {
+        DatePicker(label, selection: $date, in: range, displayedComponents: .date)
+            .datePickerStyle(.graphical)
+            .labelsHidden()
+            .pickerChrome()
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color

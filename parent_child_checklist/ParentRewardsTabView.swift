@@ -6,7 +6,9 @@
 //  neon filament separators, and non-breathing ScrollView layout.
 //  UPDATES:
 //   • Custom StatusSegmentedControl for clear unselected tabs
-//   • Themed “Not this time” sheet to match the new design
+//   • Themed “Not this time” list (full-screen sheet)
+//   • Inline “Earlier decisions” block under Pending (replaces popup menu)
+//   • Soft red “Not this time” pill in Earlier decisions for better contrast
 //
 
 import SwiftUI
@@ -25,7 +27,7 @@ private enum FuturistTheme {
     static let surfaceSolid = Color(red: 0.05, green: 0.10, blue: 0.22)
     static let surfaceFrost = Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
 
-    // Pastel pills
+    // Pastel pills (used across the app)
     static let softRedBase    = Color(red: 1.00, green: 0.36, blue: 0.43)
     static let softGreenBase  = Color(red: 0.27, green: 0.89, blue: 0.54)
     static let softRedLight   = Color(red: 1.00, green: 0.58, blue: 0.63)
@@ -217,7 +219,7 @@ struct ParentRewardsTabView: View {
     // History sheet
     @State private var historyChild: ChildProfile? = nil
 
-    // “Not this time” sheet
+    // “Not this time” sheet (full list)
     @State private var showNotApprovedSheet = false
 
     // MARK: - Filters
@@ -238,6 +240,19 @@ struct ParentRewardsTabView: View {
     private var approvedCount: Int { appState.rewardRequests.filter { $0.status == .approved }.count }
     private var claimedCount: Int { appState.rewardRequests.filter { $0.status == .claimed }.count }
     private var notApprovedCount: Int { appState.rewardRequests.filter { $0.status == .notApproved }.count }
+
+    // Full Not-this-time list (newest first)
+    private var notApprovedAll: [RewardRequest] {
+        appState.rewardRequests
+            .filter { $0.status == .notApproved }
+            .sorted { ($0.notApprovedAt ?? $0.updatedAt) > ($1.notApprovedAt ?? $1.updatedAt) }
+    }
+
+    // Preview list (inline under Pending)
+    private let earlierPreviewLimit = 3
+    private var notApprovedPreview: [RewardRequest] {
+        Array(notApprovedAll.prefix(earlierPreviewLimit))
+    }
 
     // MARK: - Status-scoped requests
     private var statusScopedRequests: [RewardRequest] {
@@ -262,6 +277,7 @@ struct ParentRewardsTabView: View {
         guard !q.isEmpty else { return childScopedRequests }
         return childScopedRequests.filter { req in
             req.title.localizedCaseInsensitiveContains(q)
+            || childName(req.childId).localizedCaseInsensitiveCompare(q) == .orderedSame
             || childName(req.childId).localizedCaseInsensitiveContains(q)
         }
     }
@@ -431,6 +447,50 @@ struct ParentRewardsTabView: View {
                             .padding(.bottom, 12)
                         }
 
+                        // ===== Earlier Decisions (inline under Pending) =====
+                        if selectedStatus == .pending, notApprovedCount > 0 {
+                            BrightLineSeparator()
+
+                            // Subhead + "View all" pill
+                            HStack {
+                                Text("Earlier decisions\(notApprovedAll.isEmpty ? "" : " (\(notApprovedAll.count))")")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                Spacer()
+                                if notApprovedAll.count > earlierPreviewLimit {
+                                    Button {
+                                        showNotApprovedSheet = true
+                                    } label: {
+                                        Text("View all")
+                                            .font(.footnote.weight(.semibold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(Color.white.opacity(0.15), in: Capsule())
+                                            .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.top, 12)
+                            .padding(.horizontal, PageMetrics.pageHPad)
+
+                            // Preview list (up to 3 cards), newest first
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(notApprovedPreview.enumerated()), id: \.element.id) { idx, req in
+                                    FrostedCard {
+                                        earlierDecisionRow(req) // uses soft red pill now
+                                    }
+                                    .padding(.horizontal, PageMetrics.pageHPad)
+
+                                    if idx < notApprovedPreview.count - 1 {
+                                        BrightLineSeparator()
+                                    }
+                                }
+                            }
+                            .padding(.bottom, 12)
+                        }
+
                         Spacer(minLength: 24)
                     }
                     .padding(.bottom, 24)
@@ -447,7 +507,7 @@ struct ParentRewardsTabView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
 
-            // Header (center title + trailing menu)
+            // Header (center title; removed trailing Menu bubble)
             .safeAreaInset(edge: .top, spacing: 0) {
                 let topSpacer: CGFloat = 8
                 ZStack {
@@ -461,27 +521,6 @@ struct ParentRewardsTabView: View {
                         Color.clear.frame(height: topSpacer)
                         HStack {
                             Spacer(minLength: 12)
-                            Menu {
-                                if notApprovedCount > 0 {
-                                    Button {
-                                        showNotApprovedSheet.toggle()
-                                    } label: {
-                                        Label("View “Not this time” (\(notApprovedCount))", systemImage: "eye")
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "ellipsis.circle")
-                                    .font(.system(size: 20, weight: .semibold))
-                                    .foregroundStyle(FuturistTheme.textPrimary)
-                                    .padding(8)
-                                    .background(
-                                        Circle().fill(Color.white.opacity(0.08))
-                                    )
-                                    .overlay(
-                                        Circle().stroke(FuturistTheme.cardStroke, lineWidth: 1)
-                                    )
-                            }
-                            .accessibilityLabel("More")
                         }
                         .padding(.horizontal, 12)
                         .padding(.bottom, 8)
@@ -501,9 +540,7 @@ struct ParentRewardsTabView: View {
             }
             .sheet(isPresented: $showNotApprovedSheet) {
                 NotApprovedListView(
-                    requests: appState.rewardRequests
-                        .filter { $0.status == .notApproved }
-                        .sorted { ($0.notApprovedAt ?? $0.updatedAt) > ($1.notApprovedAt ?? $1.updatedAt) },
+                    requests: notApprovedAll,
                     childName: { id in childName(id) },
                     onOpen: { selected = $0 },
                     onDelete: { _ = appState.deleteRewardRequest(id: $0.id) }
@@ -560,33 +597,27 @@ struct ParentRewardsTabView: View {
             .font(.subheadline)
             .foregroundStyle(FuturistTheme.textSecondary)
 
-            // Minus
             Button {
                 let ok = appState.adjustChildPoints(childId: child.id, delta: -1)
                 if !ok { showToast("Balance can’t go below 0.") }
             } label: {
-                Image(systemName: "minus.circle.fill")
-                    .font(.title3)
+                Image(systemName: "minus.circle.fill").font(.title3)
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.red)
 
-            // Plus
             Button {
                 _ = appState.adjustChildPoints(childId: child.id, delta: +1)
             } label: {
-                Image(systemName: "plus.circle.fill")
-                    .font(.title3)
+                Image(systemName: "plus.circle.fill").font(.title3)
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.accentColor)
 
-            // History
             Button {
                 historyChild = child
             } label: {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.title3)
+                Image(systemName: "clock.arrow.circlepath").font(.title3)
             }
             .buttonStyle(.plain)
             .foregroundStyle(FuturistTheme.textSecondary)
@@ -606,8 +637,6 @@ struct ParentRewardsTabView: View {
                         .font(.subheadline)
                         .foregroundStyle(FuturistTheme.textSecondary)
                     Spacer()
-
-                    // Status pill colors
                     let pill: (String, Color, Color) = {
                         switch req.status {
                         case .pending:    return (req.status.childDisplay, .orange, Color.yellow.opacity(0.18))
@@ -647,6 +676,54 @@ struct ParentRewardsTabView: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    // Earlier decisions preview row (Not this time) — SOFT RED PILL
+    @ViewBuilder
+    private func earlierDecisionRow(_ req: RewardRequest) -> some View {
+        Button { selected = req } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(childName(req.childId))
+                        .font(.subheadline)
+                        .foregroundStyle(FuturistTheme.textSecondary)
+                    Spacer()
+                    // Softer red palette for high contrast on dark frost
+                    StatusPill(
+                        text: "Not this time",
+                        fg: FuturistTheme.softRedLight,
+                        bg: FuturistTheme.softRedBase.opacity(0.22)
+                    )
+                }
+
+                Text(req.title)
+                    .font(.headline)
+                    .foregroundStyle(FuturistTheme.textPrimary)
+
+                if let d = req.notApprovedAt {
+                    Text("Not this time on \(dateOnly(d))")
+                        .font(.footnote)
+                        .foregroundStyle(FuturistTheme.textSecondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                _ = appState.deleteRewardRequest(id: req.id)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    // Simple date-only formatter helper
+    private func dateOnly(_ d: Date) -> String {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .none
+        return df.string(from: d)
     }
 
     private func statusDateLine(for req: RewardRequest) -> String {
@@ -710,7 +787,6 @@ private struct NotApprovedListView: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         if requests.isEmpty {
-                            // Empty state card
                             FrostedCard {
                                 Text("No items.")
                                     .font(.subheadline)
@@ -792,7 +868,6 @@ private struct NotApprovedListView: View {
 
                     VStack(spacing: 0) {
                         Color.clear.frame(height: topSpacer)
-                        // Add trailing/leading header actions here if ever needed.
                         HStack { Spacer() }
                             .padding(.horizontal, 12)
                             .padding(.bottom, 8)

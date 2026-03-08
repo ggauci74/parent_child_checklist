@@ -7,14 +7,11 @@ import Foundation
 import SwiftUI
 
 // MARK: - Shared Notify Recipient (for Tasks & Events notifications)
-
 enum NotifyRecipient: String, Codable, Hashable, CaseIterable, Identifiable {
     case both
     case parent
     case child
-
     var id: String { rawValue }
-
     var displayName: String {
         switch self {
         case .both: return "Both"
@@ -24,7 +21,7 @@ enum NotifyRecipient: String, Codable, Hashable, CaseIterable, Identifiable {
     }
 }
 
-// Represents a child profile in the family
+// MARK: - Child Profile (now includes pairingEpoch for QR pairing invalidation)
 struct ChildProfile: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String
@@ -33,17 +30,60 @@ struct ChildProfile: Identifiable, Hashable, Codable {
     /// - nil means "Not chosen yet" (show placeholder in parent UI).
     var avatarId: String?
 
+    /// Used to invalidate previously issued pairing tokens (QR codes).
+    /// If the parent taps "Reset Pairing" for this child, we bump this number.
+    /// Devices must present a token signed for the current epoch to (re)bind.
+    var pairingEpoch: Int
+
     init(
         id: UUID = UUID(),
         name: String,
         colorHex: String,
-        avatarId: String? = nil
+        avatarId: String? = nil,
+        pairingEpoch: Int = 0
     ) {
         self.id = id
         self.name = name
         self.colorHex = colorHex
         self.avatarId = avatarId
+        self.pairingEpoch = pairingEpoch
     }
+
+    // Defensive decoding for older local JSON that doesn't have pairingEpoch yet.
+    enum CodingKeys: String, CodingKey {
+        case id, name, colorHex, avatarId, pairingEpoch
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
+        self.name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        self.colorHex = (try? c.decode(String.self, forKey: .colorHex)) ?? "#4A7DFF"
+        self.avatarId = try? c.decode(String?.self, forKey: .avatarId)
+        self.pairingEpoch = (try? c.decode(Int.self, forKey: .pairingEpoch)) ?? 0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(colorHex, forKey: .colorHex)
+        try c.encodeIfPresent(avatarId, forKey: .avatarId)
+        try c.encode(pairingEpoch, forKey: .pairingEpoch)
+    }
+}
+
+// MARK: - QR Pairing Token (model only; signing/verification lives in service file)
+struct PairingToken: Codable, Hashable {
+    let childId: UUID
+    let issuedAt: Date
+    let expiresAt: Date
+    let nonce: String
+    let pairingEpoch: Int
+    /// Optional family scoping if needed later.
+    var familyId: UUID?
+    /// App version that generated the token (useful for troubleshooting).
+    var appVersion: String?
 }
 
 // Parent-created reusable tasks (Task Library / Templates)
@@ -74,6 +114,7 @@ struct TaskTemplate: Identifiable, Hashable, Codable {
     enum CodingKeys: String, CodingKey {
         case id, title, iconSymbol, rewardPoints, createdAt
     }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
@@ -87,7 +128,6 @@ struct TaskTemplate: Identifiable, Hashable, Codable {
 }
 
 // MARK: - Task Assignment (Child-specific, fully captured snapshot)
-
 struct TaskAssignment: Identifiable, Hashable, Codable {
     enum Occurrence: String, Codable, CaseIterable, Identifiable {
         case onceOnly
@@ -102,60 +142,48 @@ struct TaskAssignment: Identifiable, Hashable, Codable {
     }
 
     let id: UUID
-
     // Ownership
     var childId: UUID
     /// Optional reference to the template used at assignment time.
     /// We keep the snapshot fields below as the source of truth.
     var templateId: UUID?
-
     // Snapshot
     var taskTitle: String
     var taskIcon: String
     var rewardPoints: Int
-
     // Optional guidance
     var helper: String?
-
     // Options
     var subtractIfNotCompleted: Bool
     var alertMe: Bool
     var photoEvidenceRequired: Bool
     var isActive: Bool
-
     // Dates
     var startDate: Date
     var endDate: Date?
-
     // Schedule
     var occurrence: Occurrence
     /// Monday-first weekday selection: 0=Mon ... 6=Sun
     var weekdays: [Int]
-
     // Time windows (optional)
     var startTime: Date?
     var finishTime: Date?
-
     // Duration (optional)
     var durationMinutes: Int?
-
     // NEW: Link to an event assignment (optional)
     /// If set, this task is dependent on that event assignment.
     /// If the event assignment is deleted, this task should also be deleted (Option A).
     var linkedEventAssignmentId: UUID?
-
     // NEW: Notify (Start)
     var startNotifyEnabled: Bool
     var startNotifyRecipient: NotifyRecipient
     /// Minutes before start (0 = at start time). Nil when disabled.
     var startNotifyOffsetMinutes: Int?
-
     // NEW: Notify (Finish)
     var finishNotifyEnabled: Bool
     var finishNotifyRecipient: NotifyRecipient
     /// Minutes before finish (0 = at finish time). Nil when disabled.
     var finishNotifyOffsetMinutes: Int?
-
     // Audit
     var createdAt: Date
     var updatedAt: Date
@@ -233,7 +261,6 @@ struct TaskAssignment: Identifiable, Hashable, Codable {
 }
 
 // MARK: - Task Completion Record (per assignment per day) + Photo Evidence
-
 struct TaskCompletionRecord: Identifiable, Hashable, Codable {
     let id: UUID
     var assignmentId: UUID
@@ -247,10 +274,8 @@ struct TaskCompletionRecord: Identifiable, Hashable, Codable {
     /// Persisted in local JSON for lightweight UI decisions (e.g., an indicator),
     /// while the actual local file URLs (below) remain transient/unencoded.
     var hasPhotoEvidence: Bool
-
     /// Local temporary URL of the downloaded full-resolution CKAsset (transient; not encoded).
     var photoEvidenceLocalURL: URL?
-
     /// Local temporary URL of the downloaded thumbnail CKAsset (transient; not encoded).
     var photoThumbnailLocalURL: URL?
 
@@ -306,7 +331,6 @@ struct TaskItem: Identifiable, Hashable, Codable {
 }
 
 // MARK: - Color hex helper
-
 extension Color {
     init(hex: String) {
         let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
@@ -332,7 +356,6 @@ extension Color {
 }
 
 // MARK: - EVENTS + LOCATIONS
-
 /// Parent-defined locations list (reused by event assignments)
 struct LocationItem: Identifiable, Hashable, Codable {
     let id: UUID
@@ -391,52 +414,41 @@ struct EventAssignment: Identifiable, Hashable, Codable {
     }
 
     let id: UUID
-
     // Ownership
     var childId: UUID
     var templateId: UUID?
-
     // Snapshot
     var eventTitle: String
     var eventIcon: String
-
     // Optional helper
     var helper: String?
-
     // Active toggle
     var isActive: Bool
-
     // Dates / schedule
     var startDate: Date
     var endDate: Date?
     var occurrence: Occurrence
     /// Monday-first weekday selection: 0=Mon ... 6=Sun
     var weekdays: [Int]
-
     // Time
     var startTime: Date?
     var finishTime: Date?
     var durationMinutes: Int?
-
     // Location (per assignment)
     var locationId: UUID?
     var locationNameSnapshot: String
-
     // Alerts (legacy single-field alerts; kept)
     var alertMe: Bool
     /// Minutes before start time (0 = at start time). Nil when alertMe == false.
     var alertOffsetMinutes: Int?
-
     // NEW: Notify (Start)
     var startNotifyEnabled: Bool
     var startNotifyRecipient: NotifyRecipient
     var startNotifyOffsetMinutes: Int?
-
     // NEW: Notify (Finish)
     var finishNotifyEnabled: Bool
     var finishNotifyRecipient: NotifyRecipient
     var finishNotifyOffsetMinutes: Int?
-
     // Audit
     var createdAt: Date
     var updatedAt: Date
@@ -512,14 +524,12 @@ struct EventAssignment: Identifiable, Hashable, Codable {
 }
 
 // MARK: - Reward Requests
-
 enum RewardRequestStatus: String, Codable, Hashable, CaseIterable, Identifiable {
     case pending
     case approved
     case notApproved
     case claimed
     var id: String { rawValue }
-
     /// Child-facing friendly label for status
     var childDisplay: String {
         switch self {

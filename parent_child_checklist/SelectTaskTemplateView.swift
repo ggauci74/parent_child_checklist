@@ -2,11 +2,9 @@
 //  SelectTaskTemplateView.swift
 //  parent_child_checklist
 //
-//  Matches Select Location row height & spacing (92pt) and duplicates its swipe rail behavior.
-//  - Foreground content anchored to the left (HStack + Spacer) and only width shrinks,
-//    so the visible content appears to stay put while the card edge slides left.
+//  UPDATED: Extra‑compact tiles (height 64), visible trailing actions (Edit + …)
 //  - Non-breathing layout (ScrollView + LazyVStack)
-//  - Horizontal swipe rail (Edit + Delete), with warn-on-use delete (mirrors Location)
+//  - Same frosted cards, neon filament separators, and header as before
 //
 
 import SwiftUI
@@ -14,36 +12,32 @@ import UIKit
 
 // MARK: - Futurist theme tokens (parity with Select Location)
 private enum FuturistTheme {
-    static let neonAqua = Color(red: 0.20, green: 0.95, blue: 1.00)
-    static let textPrimary = Color(red: 0.92, green: 0.97, blue: 1.00)
-    static let textSecondary = Color.white.opacity(0.78)
-    static let cardStroke = Color.white.opacity(0.08)
-    static let cardShadow = Color.black.opacity(0.10)
+    static let neonAqua       = Color(red: 0.20, green: 0.95, blue: 1.00)
+    static let textPrimary    = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary  = Color.white.opacity(0.78)
+    static let cardStroke     = Color.white.opacity(0.08)
+    static let cardShadow     = Color.black.opacity(0.10)
 
-    static let softRedBase   = Color(red: 1.00, green: 0.36, blue: 0.43)
-    static let softGreenBase = Color(red: 0.27, green: 0.89, blue: 0.54)
-    static let softRedLight  = Color(red: 1.00, green: 0.58, blue: 0.63)
+    static let softRedBase    = Color(red: 1.00, green: 0.36, blue: 0.43)
+    static let softGreenBase  = Color(red: 0.27, green: 0.89, blue: 0.54)
+    static let softRedLight   = Color(red: 1.00, green: 0.58, blue: 0.63)
     static let softGreenLight = Color(red: 0.62, green: 0.95, blue: 0.73)
-
-    // Action icon colors (round Edit/Delete) – match Location
-    static let actionBlue     = Color(red: 0.11, green: 0.49, blue: 1.00)
-    static let actionRed      = Color(red: 1.00, green: 0.29, blue: 0.34)
 }
 
-// MARK: - Row metrics (match Location)
+// MARK: - Row metrics (match Location; extra‑compact height)
 private enum TaskRowMetrics {
     static let pageHPad: CGFloat     = 12
     static let cornerRadius: CGFloat = 14
     static let innerHPad: CGFloat    = 16
 
-    // MATCH Select Location tall tile
-    static let rowHeight: CGFloat    = 92
+    // EXTRA‑COMPACT tile height (was 92 → 72 → 68 → now 64)
+    static let rowHeight: CGFloat    = 64
 
-    // Chevron
+    // Chevron (kept if you want a disclosure feel; currently not shown)
     static let chevronSize: CGFloat  = 16
     static let chevronTint           = Color.white.opacity(0.85)
 
-    // Card inner trailing inset (align rail & chevron with text)
+    // Card inner trailing inset (visual rhythm)
     static let innerTrailing: CGFloat = 12
 
     // Tight vertical rhythm — separator is the only visible gap
@@ -118,7 +112,7 @@ private struct TaskCompactTile<Content: View>: View {
     }
 }
 
-/// Tall tile (each Task row), MATCH Location tile height
+/// Tall tile (each Task row), EXTRA‑COMPACT height
 private struct TaskTile<Content: View>: View {
     let content: () -> Content
     init(@ViewBuilder content: @escaping () -> Content) { self.content = content }
@@ -136,152 +130,7 @@ private struct TaskTile<Content: View>: View {
     }
 }
 
-// MARK: - Swipe-to-reveal row (MATCH Location; foreground anchored left and shrinks width only)
-private struct TaskSwipeRevealRow<RowContent: View>: View {
-    private let rowHeight: CGFloat     = TaskRowMetrics.rowHeight
-    private let circleSize: CGFloat    = 48
-    private let glyphSize: CGFloat     = 20
-    private let actionSpacing: CGFloat = 20
-    /// Row "opens" by this amount—enough to reveal both circles comfortably.
-    private let revealWidth: CGFloat   = 160
-
-    let id: UUID
-    @Binding var openRowId: UUID?
-    let rowContent: () -> RowContent
-    let onTapRow: () -> Void
-    let onEdit: () -> Void
-    let onDelete: () -> Void
-
-    // Location-style gesture state
-    @GestureState private var dragX: CGFloat = 0
-    private var isOpen: Bool { openRowId == id }
-
-    var body: some View {
-        GeometryReader { geo in
-            let fullWidth = geo.size.width
-            // Mirror Location: compute revealed distance from drag state or open state.
-            let revealed  = min(revealWidth, max(0, isOpen ? revealWidth : -dragX))
-            let railActive = revealed > 0
-
-            ZStack(alignment: .trailing) {
-                // Trailing action rail (Edit + Delete), right-justified, visible as we "open"
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    HStack(spacing: actionSpacing) {
-                        VStack(spacing: 6) {
-                            Button {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                onEdit()
-                            } label: {
-                                Circle()
-                                    .fill(FuturistTheme.actionBlue)
-                                    .frame(width: circleSize, height: circleSize)
-                                    .overlay(
-                                        Image(systemName: "pencil")
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: glyphSize, weight: .semibold))
-                                    )
-                                    .contentShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                            Text("Edit")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(FuturistTheme.textPrimary.opacity(0.90))
-                                .shadow(color: .black.opacity(0.35), radius: 1, x: 0, y: 1)
-                        }
-                        VStack(spacing: 6) {
-                            Button {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                onDelete()
-                            } label: {
-                                Circle()
-                                    .fill(FuturistTheme.actionRed)
-                                    .frame(width: circleSize, height: circleSize)
-                                    .overlay(
-                                        Image(systemName: "trash")
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: glyphSize, weight: .semibold))
-                                    )
-                                    .contentShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                            Text("Delete")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(FuturistTheme.textPrimary.opacity(0.90))
-                                .shadow(color: .black.opacity(0.35), radius: 1, x: 0, y: 1)
-                        }
-                    }
-                    .padding(.trailing, TaskRowMetrics.innerTrailing)
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .frame(height: rowHeight, alignment: .center)
-                .opacity(railActive ? 1 : 0)
-                .allowsHitTesting(railActive)
-                .zIndex(railActive ? 1 : 0)
-
-                // ✅ Foreground content: anchored to leading. Shrink width only; do NOT offset.
-                HStack(spacing: 0) {
-                    rowContent()
-                        .frame(width: fullWidth - revealed, alignment: .leading)
-                    Spacer(minLength: 0) // anchors foreground to the leading edge
-                }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 10, coordinateSpace: .local)
-                        .updating($dragX) { value, state, _ in
-                            // Horizontal-only state like Location (keeps scroll feeling similar)
-                            state = min(0, max(-revealWidth, value.translation.width))
-                        }
-                        .onEnded { value in
-                            let finalReveal = min(revealWidth, max(0, -(value.translation.width)))
-                            let threshold = revealWidth * 0.33
-                            let shouldOpen = finalReveal > threshold
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                                openRowId = shouldOpen ? id : nil
-                            }
-                            if shouldOpen { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-                        }
-                )
-                .onTapGesture {
-                    if isOpen {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            openRowId = nil
-                        }
-                    } else {
-                        onTapRow()
-                    }
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: TaskRowMetrics.cornerRadius, style: .continuous))
-        }
-        .frame(height: rowHeight)
-    }
-}
-
-// MARK: - Toolbar pill button (Close / ＋) – same look as Location
-private struct ToolbarPillButton: View {
-    let label: String
-    var foreground: Color
-    var background: Color
-    var stroke: Color
-    var fixedWidth: CGFloat? = nil
-    var fixedHeight: CGFloat? = nil
-    var action: () -> Void
-
-    var body: some View {
-        Text(label)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(foreground)
-            .frame(width: fixedWidth, height: fixedHeight)
-            .background(Capsule().fill(background))
-            .overlay(Capsule().stroke(stroke, lineWidth: 1))
-            .shadow(color: FuturistTheme.cardShadow, radius: 3)
-            .contentShape(Capsule())
-            .onTapGesture { action() }
-    }
-}
-
-// MARK: - Delete confirmation (mirrors Location’s structure & tone)
+// MARK: - Delete confirmation (unchanged; mirrors Location’s structure & tone)
 private struct TaskDeleteConfirmSheet: View {
     @Binding var isPresented: Bool
     let title: String
@@ -363,10 +212,7 @@ struct SelectTaskTemplateView: View {
     @State private var showAddTemplate = false
     @State private var editingTemplate: TaskTemplate? = nil
 
-    // Swipe-open tracking
-    @State private var openRowId: UUID? = nil
-
-    // Delete confirm (mirrors Location)
+    // Delete confirm
     @State private var showDeletePrompt: Bool = false
     @State private var pendingDelete: TaskTemplate? = nil
     @State private var pendingDeleteUsageCount: Int = 0
@@ -397,14 +243,13 @@ struct SelectTaskTemplateView: View {
 
     // Count how many assignments use a template
     private func usageCount(for templateId: UUID) -> Int {
-        return appState.taskAssignments.filter { $0.templateId == templateId }.count
+        appState.taskAssignments.filter { $0.templateId == templateId }.count
     }
 
-    // Perform deletion (mirror Location: warn → delete)
+    // Perform deletion
     private func performDeleteConfirmed() {
         guard let tpl = pendingDelete else { return }
         _ = appState.deleteTaskTemplate(id: tpl.id) // update to your API if named differently
-        if openRowId == tpl.id { openRowId = nil }
         pendingDelete = nil
         pendingDeleteUsageCount = 0
         showDeletePrompt = false
@@ -412,199 +257,217 @@ struct SelectTaskTemplateView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .top) {
-                CurvyAquaBlueBackground(animate: true)
-                    .ignoresSafeArea()
+            ZZZBackgroundAndContent
+        }
+    }
 
-                // CONTENT (header is provided by safeAreaInset below)
-                ScrollView {
-                    VStack(spacing: 0) {
+    // Extracted for readability
+    private var ZZZBackgroundAndContent: some View {
+        ZStack(alignment: .top) {
+            CurvyAquaBlueBackground(animate: true)
+                .ignoresSafeArea()
 
-                        // SEARCH + HEADER (compact tiles) — match Location spacing
-                        VStack(spacing: 8) {
-                            TaskCompactTile {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "magnifyingglass")
+            // CONTENT (header is provided by safeAreaInset below)
+            ScrollView {
+                VStack(spacing: 0) {
+
+                    // SEARCH + HEADER (compact tiles) — match Location spacing
+                    VStack(spacing: 8) {
+                        TaskCompactTile {
+                            HStack(spacing: 10) {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(FuturistTheme.textPrimary.opacity(0.92))
+                                TextField(
+                                    "",
+                                    text: $searchText,
+                                    prompt: Text("Search")
                                         .foregroundStyle(FuturistTheme.textPrimary.opacity(0.92))
-                                    TextField(
-                                        "",
-                                        text: $searchText,
-                                        prompt: Text("Search")
-                                            .foregroundStyle(FuturistTheme.textPrimary.opacity(0.92))
-                                    )
-                                    .textInputAutocapitalization(.none)
-                                    .foregroundStyle(FuturistTheme.textPrimary)
-                                    .tint(FuturistTheme.neonAqua)
-                                }
+                                )
+                                .textInputAutocapitalization(.none)
+                                .foregroundStyle(FuturistTheme.textPrimary)
+                                .tint(FuturistTheme.neonAqua)
                             }
-
-                            Text("Tasks")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(FuturistTheme.textSecondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .padding(.horizontal, TaskRowMetrics.pageHPad)
-                        .padding(.top, 12)
 
-                        // TASKS (separator-only spacing) — MATCH Location rhythm
-                        if templates.isEmpty {
-                            Text("No tasks yet. Tap + to create one.")
-                                .font(.subheadline)
-                                .foregroundStyle(FuturistTheme.textSecondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 8)
-                        } else {
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(templates.enumerated()), id: \.element.id) { index, tpl in
-                                    let isRailOpen = (openRowId == tpl.id)
+                        Text("Tasks")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(FuturistTheme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, TaskRowMetrics.pageHPad)
+                    .padding(.top, 12)
 
-                                    TaskSwipeRevealRow(
-                                        id: tpl.id,
-                                        openRowId: $openRowId,
-                                        rowContent: {
-                                            TaskTile {
-                                                HStack(spacing: 12) {
-                                                    // Slightly larger emoji for tall tile
-                                                    TaskEmojiIconView(icon: tpl.iconSymbol, size: 24)
+                    // TASKS (separator-only spacing)
+                    if templates.isEmpty {
+                        Text("No tasks yet. Tap + to create one.")
+                            .font(.subheadline)
+                            .foregroundStyle(FuturistTheme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 8)
+                    } else {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(templates.enumerated()), id: \.element.id) { index, tpl in
+                                // ---- Row tile with visible action cluster (Edit + More) ----
+                                TaskTile {
+                                    HStack(spacing: 12) {
+                                        // Icon + title + points
+                                        TaskEmojiIconView(icon: tpl.iconSymbol, size: 20)
 
-                                                    VStack(alignment: .leading, spacing: 6) {
-                                                        Text(tpl.title)
-                                                            .font(.headline)
-                                                            .foregroundStyle(FuturistTheme.textPrimary)
+                                        VStack(alignment: .leading, spacing: 3) { // was 4 → now 3
+                                            Text(tpl.title)
+                                                .font(.headline)
+                                                .foregroundStyle(FuturistTheme.textPrimary)
 
-                                                        // points line
-                                                        HStack(spacing: 6) {
-                                                            Text("💎")
-                                                            Text("\(max(0, tpl.rewardPoints))")
-                                                                .fontWeight(.semibold)
-                                                        }
-                                                        .font(.footnote)
-                                                        .foregroundStyle(FuturistTheme.textSecondary)
-                                                    }
-
-                                                    Spacer(minLength: 10)
-
-                                                    // Chevron hides while rail open (parity with Location)
-                                                    if !isRailOpen {
-                                                        Image(systemName: "chevron.right")
-                                                            .font(.system(size: TaskRowMetrics.chevronSize, weight: .semibold))
-                                                            .foregroundStyle(TaskRowMetrics.chevronTint)
-                                                    }
-                                                }
+                                            HStack(spacing: 6) {
+                                                Text("💎")
+                                                Text("\(max(0, tpl.rewardPoints))")
+                                                    .fontWeight(.semibold)
                                             }
-                                        },
-                                        onTapRow: {
-                                            onPick(tpl)
-                                            dismiss()
-                                        },
-                                        onEdit: {
-                                            withAnimation { openRowId = nil }
-                                            editingTemplate = tpl
-                                        },
-                                        onDelete: {
-                                            withAnimation { openRowId = nil }
-                                            pendingDelete = tpl
-                                            pendingDeleteUsageCount = usageCount(for: tpl.id)
-                                            showDeletePrompt = true
+                                            .font(.footnote)
+                                            .foregroundStyle(FuturistTheme.textSecondary)
                                         }
-                                    )
-                                    .padding(.horizontal, TaskRowMetrics.pageHPad)
-                                    .padding(.top, index == 0 ? TaskRowMetrics.firstRowTopPad
-                                                              : TaskRowMetrics.betweenRowsTopPad)
 
-                                    // Filament between cards (not after last) — no vertical padding
-                                    if index < templates.count - 1 {
-                                        TaskBrightLineSeparator()
-                                            .padding(.vertical, TaskRowMetrics.separatorVerticalPad)
+                                        Spacer(minLength: 10)
+
+                                        // Action cluster: Edit + More (Delete inside)
+                                        HStack(spacing: 10) {
+                                            Button {
+                                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                                editingTemplate = tpl
+                                            } label: {
+                                                Text("Edit")
+                                                    .font(.footnote.weight(.semibold))
+                                                    .foregroundStyle(Color.white)
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 5) // was 6 → now 5
+                                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                                    .overlay(
+                                                        Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                                                    )
+                                            }
+                                            .buttonStyle(.plain)
+                                            .accessibilityLabel("Edit task “\(tpl.title)”")
+
+                                            Menu {
+                                                Button(role: .destructive) {
+                                                    pendingDelete = tpl
+                                                    pendingDeleteUsageCount = usageCount(for: tpl.id)
+                                                    showDeletePrompt = true
+                                                } label: {
+                                                    Label("Delete", systemImage: "trash")
+                                                }
+                                            } label: {
+                                                Image(systemName: "ellipsis.circle")
+                                                    .font(.title3)
+                                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                                    .padding(.horizontal, 2)
+                                            }
+                                            .accessibilityLabel("More actions for “\(tpl.title)”")
+                                        }
+                                    }
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        // Tap anywhere on the tile (except buttons) selects the template
+                                        onPick(tpl)
+                                        dismiss()
                                     }
                                 }
+                                .padding(.horizontal, TaskRowMetrics.pageHPad)
+                                .padding(.top, index == 0 ? TaskRowMetrics.firstRowTopPad
+                                                          : TaskRowMetrics.betweenRowsTopPad)
+
+                                // Filament between cards (not after last) — no vertical padding
+                                if index < templates.count - 1 {
+                                    TaskBrightLineSeparator()
+                                        .padding(.vertical, TaskRowMetrics.separatorVerticalPad)
+                                }
                             }
-                            .padding(.bottom, 24)
                         }
+                        .padding(.bottom, 24)
                     }
                 }
-
-                // Delete confirm (mirrors Location’s confirm)
-                if showDeletePrompt {
-                    TaskDeleteConfirmSheet(
-                        isPresented: $showDeletePrompt,
-                        title: deleteAlertTitle,
-                        message: deleteAlertMessage,
-                        onDelete: { performDeleteConfirmed() }
-                    )
-                    .zIndex(20)
-                    .transition(.opacity)
-                }
-            }
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationBarTitleDisplayMode(.inline)
-
-            // ✅ Header via safeAreaInset — exactly like Select Location
-            .safeAreaInset(edge: .top, spacing: 0) {
-                ZStack {
-                    Text("Select Task")
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(FuturistTheme.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-
-                    HStack {
-                        let pillWidth: CGFloat = 76
-                        let pillHeight: CGFloat = 32
-
-                        Text("Close")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Color.white)
-                            .frame(width: pillWidth, height: pillHeight)
-                            .background(Capsule().fill(FuturistTheme.softRedLight))
-                            .overlay(Capsule().stroke(FuturistTheme.softRedBase.opacity(0.75), lineWidth: 1))
-                            .shadow(color: FuturistTheme.cardShadow, radius: 3)
-                            .contentShape(Capsule())
-                            .onTapGesture { dismiss() }
-
-                        Spacer(minLength: 12)
-
-                        Text("+")
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(Color.black.opacity(0.9))
-                            .frame(width: pillWidth, height: pillHeight)
-                            .background(Capsule().fill(FuturistTheme.softGreenLight))
-                            .overlay(Capsule().stroke(FuturistTheme.softGreenBase.opacity(0.75), lineWidth: 1))
-                            .shadow(color: FuturistTheme.cardShadow, radius: 3)
-                            .contentShape(Capsule())
-                            .onTapGesture { showAddTemplate = true }
-                            .accessibilityLabel(Text("New Task Template"))
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-                }
-                .background(Color.clear)
             }
 
-            // Create
-            .sheet(isPresented: $showAddTemplate) {
-                AddTaskTemplateView(
-                    onSaved: { created in
-                        onPick(created)
-                        dismiss()
-                    },
-                    onCancel: { }
+            // Delete confirm (same themed sheet)
+            if showDeletePrompt {
+                TaskDeleteConfirmSheet(
+                    isPresented: $showDeletePrompt,
+                    title: deleteAlertTitle,
+                    message: deleteAlertMessage,
+                    onDelete: { performDeleteConfirmed() }
                 )
-                .environmentObject(appState)
+                .zIndex(20)
+                .transition(.opacity)
             }
-            // Edit
-            .sheet(item: $editingTemplate) { tpl in
-                EditTaskTemplateView(
-                    template: tpl,
-                    onSaved: { updated in
-                        onPick(updated)
-                        dismiss()
-                    },
-                    onCancel: { }
-                )
-                .environmentObject(appState)
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+
+        // Header via safeAreaInset — exactly like Select Location
+        .safeAreaInset(edge: .top, spacing: 0) {
+            ZStack {
+                Text("Select Task")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+
+                HStack {
+                    let pillWidth: CGFloat = 76
+                    let pillHeight: CGFloat = 32
+
+                    Text("Close")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: pillWidth, height: pillHeight)
+                        .background(Capsule().fill(FuturistTheme.softRedLight))
+                        .overlay(Capsule().stroke(FuturistTheme.softRedBase.opacity(0.75), lineWidth: 1))
+                        .shadow(color: FuturistTheme.cardShadow, radius: 3)
+                        .contentShape(Capsule())
+                        .onTapGesture { dismiss() }
+
+                    Spacer(minLength: 12)
+
+                    Text("+")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(Color.black.opacity(0.9))
+                        .frame(width: pillWidth, height: pillHeight)
+                        .background(Capsule().fill(FuturistTheme.softGreenLight))
+                        .overlay(Capsule().stroke(FuturistTheme.softGreenBase.opacity(0.75), lineWidth: 1))
+                        .shadow(color: FuturistTheme.cardShadow, radius: 3)
+                        .contentShape(Capsule())
+                        .onTapGesture { showAddTemplate = true }
+                        .accessibilityLabel(Text("New Task Template"))
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
+            .background(Color.clear)
+        }
+
+        // Create
+        .sheet(isPresented: $showAddTemplate) {
+            AddTaskTemplateView(
+                onSaved: { created in
+                    onPick(created)
+                    dismiss()
+                },
+                onCancel: { }
+            )
+            .environmentObject(appState)
+        }
+        // Edit
+        .sheet(item: $editingTemplate) { tpl in
+            EditTaskTemplateView(
+                template: tpl,
+                onSaved: { updated in
+                    onPick(updated)
+                    dismiss()
+                },
+                onCancel: { }
+            )
+            .environmentObject(appState)
         }
     }
 }

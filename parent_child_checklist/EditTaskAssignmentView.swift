@@ -219,6 +219,7 @@ private struct PickerChrome: ViewModifier {
 }
 private extension View { func pickerChrome() -> some View { modifier(PickerChrome()) } }
 
+// Inline date/time pickers (unchanged)
 private struct InlineGraphicalCalendar: View {
     let label: String
     @Binding var date: Date
@@ -234,7 +235,6 @@ private struct InlineGraphicalCalendar: View {
             .transition(.opacity.combined(with: .move(edge: .top)))
     }
 }
-
 private struct InlineWheelTimePicker: View {
     let label: String
     @Binding var time: Date
@@ -253,6 +253,227 @@ private struct InlineWheelTimePicker: View {
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.06)))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(FuturistTheme.cardStroke, lineWidth: 1))
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+}
+
+// MARK: - Multi‑select child picker (Futurist; push)
+private struct MultiPickerTopBar: View {
+    let canApply: Bool
+    let onCancel: () -> Void
+    let onApply: () -> Void
+
+    var body: some View {
+        let pillWidth: CGFloat = 76
+        let pillHeight: CGFloat = 32
+
+        ZStack {
+            Text("Assign To")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(FuturistTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+            HStack {
+                ToolbarPillButton(
+                    label: "Cancel",
+                    foreground: .white,
+                    background: FuturistTheme.softRedLight,
+                    stroke: FuturistTheme.softRedBase.opacity(0.75),
+                    fixedWidth: pillWidth,
+                    fixedHeight: pillHeight,
+                    action: onCancel
+                )
+                Spacer(minLength: 12)
+                ToolbarPillButton(
+                    label: "Apply",
+                    foreground: canApply ? Color.black.opacity(0.9) : FuturistTheme.textSecondary,
+                    background: canApply ? FuturistTheme.softGreenLight : Color.clear,
+                    stroke: canApply ? FuturistTheme.softGreenBase.opacity(0.75)
+                                     : FuturistTheme.textSecondary.opacity(0.35),
+                    disabled: !canApply,
+                    glow: canApply,
+                    fixedWidth: pillWidth,
+                    fixedHeight: pillHeight,
+                    action: { if canApply { onApply() } }
+                )
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .background(Color.clear)
+    }
+}
+
+private struct MultiChildPickerScreen: View {
+    let allChildren: [ChildProfile]
+    let preselected: Set<UUID>
+    var onApply: (Set<UUID>) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var working: Set<UUID> = []
+    @State private var query: String = ""
+
+    private var filteredChildren: [ChildProfile] {
+        let sorted = allChildren.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return sorted }
+        return sorted.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    private var canApply: Bool { !working.isEmpty }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            CurvyAquaBlueBackground(animate: true).ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Search
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Search")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                            HStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                TextField("Find a child…", text: $query)
+                                    .textInputAutocapitalization(.words)
+                                    .autocorrectionDisabled(true)
+                                    .foregroundStyle(FuturistTheme.textPrimary)
+                            }
+                            .padding(10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                        }
+                        .foregroundStyle(FuturistTheme.textPrimary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+
+                    BrightLineSeparator()
+
+                    // Children list
+                    FrostedCard {
+                        VStack(spacing: 0) {
+                            ForEach(filteredChildren) { child in
+                                let isChecked = working.contains(child.id)
+                                Button {
+                                    toggle(child.id)
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 32)
+                                        Text(child.name)
+                                            .foregroundStyle(FuturistTheme.textPrimary)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(isChecked ? FuturistTheme.neonAqua : Color.white.opacity(0.45))
+                                            .accessibilityHidden(true)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(isChecked ? Color.white.opacity(0.06) : Color.clear)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(child.name), \(isChecked ? "selected" : "not selected")")
+
+                                if child.id != filteredChildren.last?.id {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.08))
+                                        .frame(height: 1)
+                                        .padding(.leading, 46)
+                                        .accessibilityHidden(true)
+                                }
+                            }
+
+                            if filteredChildren.isEmpty {
+                                Text("No matches")
+                                    .font(.footnote)
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    BrightLineSeparator()
+
+                    // Select All / Clear All
+                    FrostedCard {
+                        HStack(spacing: 12) {
+                            Button {
+                                working = Set(allChildren.map(\.id))
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Select All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                working.removeAll()
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Clear All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Spacer()
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    Spacer(minLength: 24)
+                }
+                .padding(.bottom, 24)
+            }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: 12) // cushion
+                MultiPickerTopBar(
+                    canApply: canApply,
+                    onCancel: { dismiss() },
+                    onApply: {
+                        onApply(working)
+                        dismiss()
+                    }
+                )
+            }
+            .background(Color.clear)
+        }
+        .onAppear { working = preselected }
+    }
+
+    private func toggle(_ id: UUID) {
+        if working.contains(id) { working.remove(id) } else { working.insert(id) }
     }
 }
 
@@ -292,6 +513,10 @@ struct EditTaskAssignmentView: View {
         _finishNotifyEnabled = State(initialValue: assignment.finishNotifyEnabled)
         _finishNotifyRecipient = State(initialValue: assignment.finishNotifyRecipient)
         _finishNotifyOffsetMinutes = State(initialValue: assignment.finishNotifyOffsetMinutes ?? 0)
+
+        // NEW: assignee(s)
+        _assignedChildId = State(initialValue: assignment.childId)
+        _multiSelectedChildIds = State(initialValue: [assignment.childId])
     }
 
     // MARK: - Template & Fields
@@ -302,6 +527,22 @@ struct EditTaskAssignmentView: View {
     @State private var rewardPoints: Int
     @State private var subtractIfNotCompleted: Bool
     @State private var isActive: Bool
+
+    // NEW: Assign To (multi-select with a primary)
+    @State private var assignedChildId: UUID
+    @State private var multiSelectedChildIds: Set<UUID>
+    @State private var showAssignToPicker = false
+    private var assigneesSummaryText: String {
+        let allIds = Set(appState.children.map(\.id))
+        if multiSelectedChildIds == allIds && !allIds.isEmpty { return "All children" }
+        let names = appState.children
+            .filter { multiSelectedChildIds.contains($0.id) }
+            .map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        guard !names.isEmpty else { return "None" }
+        if names.count <= 2 { return names.joined(separator: ", ") }
+        return "\(names[0]), +\(names.count - 1) more"
+    }
 
     // Dates / Occurrence
     @State private var startDate: Date
@@ -332,7 +573,7 @@ struct EditTaskAssignmentView: View {
     @State private var lastClampToastAt: Date = .distantPast
     @State private var skipTodayInfo: String? = nil
 
-    // 🔹 Delete confirmation flag
+    // Delete confirmation flag
     @State private var showDeleteConfirm: Bool = false
 
     // Notify Me (persisted)
@@ -346,7 +587,7 @@ struct EditTaskAssignmentView: View {
     // Collapsible helper
     @State private var showHelperEditor: Bool = false
 
-    // 🔹 UISegmentedControl appearance backups (for parity with Assign Task)
+    // UISegmentedControl appearance backups
     @State private var prevSegTitleAttrsNormal: [NSAttributedString.Key: Any]?
     @State private var prevSegTitleAttrsSelected: [NSAttributedString.Key: Any]?
     @State private var prevSelectedTintColor: UIColor?
@@ -356,10 +597,8 @@ struct EditTaskAssignmentView: View {
         var cal = Calendar(identifier: .iso8601); cal.timeZone = .current; return cal
     }
     private func dayOnly(_ d: Date) -> Date { isoCalendar.startOfDay(for: d) }
-    private var startDatePickerLowerBound: Date {
-        // Allow selecting back to the original stored start date (even if it is in the past)
-        min(dayOnly(Date()), dayOnly(original.startDate))
-    }
+    private var startDatePickerLowerBound: Date { min(dayOnly(Date()), dayOnly(original.startDate)) }
+
     private func showLocalToast(_ message: String) {
         withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) { localToastMessage = message }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
@@ -377,15 +616,11 @@ struct EditTaskAssignmentView: View {
         let wd = isoCalendar.component(.weekday, from: date) // 1=Sun ... 7=Sat
         switch wd { case 2: return 0; case 3: return 1; case 4: return 2; case 5: return 3; case 6: return 4; case 7: return 5; default: return 6 }
     }
-    private func isTodaySelectedWeekday() -> Bool {
-        selectedWeekdays.contains(weekdayIndexMondayFirst(for: startDate))
-    }
+    private func isTodaySelectedWeekday() -> Bool { selectedWeekdays.contains(weekdayIndexMondayFirst(for: startDate)) }
     private func clampFinishNotBeforeStart() {
         guard startTimeEnabled, finishTimeEnabled else { return }
         if finishTime < startTime { finishTime = startTime }
     }
-
-    // Option‑B: Specified Days + past start time today → bump Start Date +1 day with hint
     private func handlePastTimeOnTodayIfNeeded() {
         guard occurrence == .specifiedDays else { skipTodayInfo = nil; return }
         guard dayOnly(startDate) == dayOnly(Date()) else { skipTodayInfo = nil; return }
@@ -408,33 +643,23 @@ struct EditTaskAssignmentView: View {
             skipTodayInfo = "Start time has already passed today. First occurrence will be \(df.string(from: startDate))."
         }
     }
-
     private func enforceNoPastScheduling() {
         let now = Date()
         let today = dayOnly(Date())
 
-        // ❌ Removed: automatic clamping of past Start Date to today (and its toast).
-        // We preserve the original start date in Edit mode.
-
-        // Keep finish date ≥ start date (and show a helpful toast if we auto-correct).
         if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
             finishDate = startDate
             clampToast("Finish date adjusted to match start date.")
         }
 
-        // Same-day time sanity checks (only if not Specified Days)
         let isToday = (dayOnly(startDate) == today)
         if isToday && occurrence != .specifiedDays {
             let nowComps = isoCalendar.dateComponents([.hour, .minute], from: now)
             let nowKey = (nowComps.hour ?? 0) * 60 + (nowComps.minute ?? 0)
             let sKey = (isoCalendar.component(.hour, from: startTime) * 60) + isoCalendar.component(.minute, from: startTime)
             let fKey = (isoCalendar.component(.hour, from: finishTime) * 60) + isoCalendar.component(.minute, from: finishTime)
-            if startTimeEnabled && sKey < nowKey {
-                startTime = now; clampToast("Start time adjusted to now.")
-            }
-            if finishTimeEnabled && fKey < nowKey {
-                finishTime = now; clampToast("Finish time adjusted to now.")
-            }
+            if startTimeEnabled && sKey < nowKey { startTime = now; clampToast("Start time adjusted to now.") }
+            if finishTimeEnabled && fKey < nowKey { finishTime = now; clampToast("Finish time adjusted to now.") }
         }
 
         clampFinishNotBeforeStart()
@@ -442,7 +667,6 @@ struct EditTaskAssignmentView: View {
         reconcileSelectedWeekdaysWithAllowed()
     }
 
-    // Allowed weekdays for Specified Days within Start..Finish range
     private var allowedWeekdays: Set<Int> {
         guard finishDateEnabled else { return Set(0..<7) }
         let start = dayOnly(startDate)
@@ -501,6 +725,16 @@ struct EditTaskAssignmentView: View {
     private func saveEdits() {
         enforceNoPastScheduling()
 
+        // Choose a primary child: keep current if still selected; else A→Z first
+        let primaryId: UUID = {
+            if multiSelectedChildIds.contains(assignedChildId) { return assignedChildId }
+            // Pick first by name A→Z
+            let sorted = appState.children
+                .filter { multiSelectedChildIds.contains($0.id) }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            return sorted.first?.id ?? assignedChildId
+        }()
+
         let taskTitle  = selectedTemplate?.title ?? original.taskTitle
         let taskIcon   = selectedTemplate?.iconSymbol ?? original.taskIcon
         let templateId = selectedTemplate?.id ?? original.templateId
@@ -516,23 +750,25 @@ struct EditTaskAssignmentView: View {
         let persistedStartOffset: Int?  = startNotifyEnabled  ? max(0, startNotifyOffsetMinutes)  : nil
         let persistedFinishOffset: Int? = finishNotifyEnabled ? max(0, finishNotifyOffsetMinutes) : nil
 
+        // Update the original assignment for the primary child
         var updated = original
-        updated.templateId = templateId
-        updated.taskTitle  = taskTitle
-        updated.taskIcon   = taskIcon
+        updated.childId     = primaryId
+        updated.templateId  = templateId
+        updated.taskTitle   = taskTitle
+        updated.taskIcon    = taskIcon
         updated.rewardPoints = max(0, rewardPoints)
-        updated.helper = helperOrNil
+        updated.helper      = helperOrNil
         updated.subtractIfNotCompleted = subtractIfNotCompleted
-        updated.alertMe = alertMe
+        updated.alertMe     = alertMe
         updated.photoEvidenceRequired = photoEvidence
-        updated.isActive = isActive
-        updated.startDate = startDate
-        updated.endDate   = end
-        updated.occurrence = occurrence
-        updated.weekdays   = Array(selectedWeekdays).sorted()
-        updated.startTime  = startTimeValue
-        updated.finishTime = finishTimeValue
-        updated.durationMinutes = nil // Duration removed
+        updated.isActive    = isActive
+        updated.startDate   = startDate
+        updated.endDate     = end
+        updated.occurrence  = occurrence
+        updated.weekdays    = Array(selectedWeekdays).sorted()
+        updated.startTime   = startTimeValue
+        updated.finishTime  = finishTimeValue
+        updated.durationMinutes = nil
 
         updated.startNotifyEnabled = startNotifyEnabled
         updated.startNotifyRecipient = startNotifyRecipient
@@ -540,10 +776,48 @@ struct EditTaskAssignmentView: View {
         updated.finishNotifyEnabled = finishNotifyEnabled
         updated.finishNotifyRecipient = finishNotifyRecipient
         updated.finishNotifyOffsetMinutes = persistedFinishOffset
-        updated.updatedAt = Date()
+        updated.updatedAt  = Date()
 
         _ = appState.updateTaskAssignment(updated)
 
+        // Create duplicates for any additional selected children (excluding primary)
+        let extras = multiSelectedChildIds.subtracting([primaryId])
+        for extraId in extras {
+            let dup = TaskAssignment(
+                childId: extraId,
+                templateId: updated.templateId,
+                taskTitle: updated.taskTitle,
+                taskIcon: updated.taskIcon,
+                rewardPoints: updated.rewardPoints,
+                helper: updated.helper,
+                subtractIfNotCompleted: updated.subtractIfNotCompleted,
+                alertMe: updated.alertMe,
+                photoEvidenceRequired: updated.photoEvidenceRequired,
+                isActive: updated.isActive,
+                startDate: updated.startDate,
+                endDate: updated.endDate,
+                occurrence: updated.occurrence,
+                weekdays: updated.weekdays,
+                startTime: updated.startTime,
+                finishTime: updated.finishTime,
+                durationMinutes: nil,
+                linkedEventAssignmentId: updated.linkedEventAssignmentId,
+                startNotifyEnabled: updated.startNotifyEnabled,
+                startNotifyRecipient: updated.startNotifyRecipient,
+                startNotifyOffsetMinutes: updated.startNotifyOffsetMinutes,
+                finishNotifyEnabled: updated.finishNotifyEnabled,
+                finishNotifyRecipient: updated.finishNotifyRecipient,
+                finishNotifyOffsetMinutes: updated.finishNotifyOffsetMinutes,
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            _ = appState.createTaskAssignment(dup)
+            if dup.isActive {
+                NotificationManager.shared.scheduleNext(for: dup, audience: currentAudience())
+            }
+        }
+
+        // Notifications for the primary updated assignment
         if updated.isActive {
             NotificationManager.shared.scheduleNext(for: updated, audience: currentAudience())
         } else {
@@ -711,7 +985,25 @@ struct EditTaskAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 2) REWARD POINTS
+                        // 2) ASSIGN TO — now multi-select summary with push picker
+                        FrostedCard {
+                            Button { showAssignToPicker = true } label: {
+                                HStack {
+                                    Text("Assign To").foregroundStyle(FuturistTheme.textPrimary)
+                                    Spacer()
+                                    Text(assigneesSummaryText).foregroundStyle(FuturistTheme.textSecondary)
+                                    Image(systemName: "chevron.right")
+                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(Text("Assign To \(assigneesSummaryText)"))
+                        }
+                        .padding(.horizontal, 12)
+
+                        BrightLineSeparator()
+
+                        // 3) REWARD POINTS
                         FrostedCard {
                             ViewThatFits(in: .horizontal) {
                                 HStack(alignment: .center, spacing: 12) {
@@ -726,12 +1018,13 @@ struct EditTaskAssignmentView: View {
                                     ToggleRow(title: "Subtract points if not completed", isOn: $subtractIfNotCompleted)
                                 }
                             }
+                            .foregroundStyle(FuturistTheme.textPrimary)
                         }
                         .padding(.horizontal, 12)
 
                         BrightLineSeparator()
 
-                        // 3) DATES (inline graphical)
+                        // 4) DATES (inline graphical)
                         FrostedCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 Button {
@@ -795,7 +1088,7 @@ struct EditTaskAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 4) OCCURRENCE (segmented + weekday chips)
+                        // 5) OCCURRENCE (segmented + weekday chips)
                         FrostedCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 Picker("Occurrence", selection: $occurrence) {
@@ -837,7 +1130,7 @@ struct EditTaskAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 5) TIME (inline wheels + notify)
+                        // 6) TIME (inline wheels + notify)
                         FrostedCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 ToggleRow(title: "Start Time", isOn: $startTimeEnabled)
@@ -968,7 +1261,7 @@ struct EditTaskAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 6) OPTIONS
+                        // 7) OPTIONS
                         FrostedCard {
                             ToggleRow(title: "Photo Evidence", isOn: $photoEvidence)
                         }
@@ -976,7 +1269,7 @@ struct EditTaskAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 7) DELETE (High-contrast pill)
+                        // 8) DELETE (High-contrast pill)
                         FrostedCard {
                             Button {
                                 showDeleteConfirm = true
@@ -984,7 +1277,7 @@ struct EditTaskAssignmentView: View {
                                 HStack(spacing: 8) {
                                     Image(systemName: "trash.fill")
                                         .font(.body.weight(.semibold))
-                                    Text("Delete Assignment")
+                                    Text("Delete Task Assignment")
                                         .font(.body.weight(.semibold))
                                 }
                                 .foregroundStyle(Color.white)
@@ -1018,12 +1311,12 @@ struct EditTaskAssignmentView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
 
-            // ✅ Custom top bar + 12‑pt cushion so pills don’t hug the sheet’s top radius
+            // Custom top bar
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: 12) // ← the cushion
+                    Color.clear.frame(height: 12) // cushion from sheet radius
                     EditTopBar(
-                        canSave: true,  // tighten if desired
+                        canSave: true,
                         onCancel: { dismiss() },
                         onSave: { saveEdits() }
                     )
@@ -1043,23 +1336,36 @@ struct EditTaskAssignmentView: View {
                 .environmentObject(appState)
             }
 
-            // ✨ Match Assign Task segmented styling, scoped to this screen
-            .onAppear {
-                // ⛔️ Removed automatic enforcement on appear to avoid changing existing data
-                // enforceNoPastScheduling()
-                // handlePastTimeOnTodayIfNeeded()
+            // NEW: Assign To picker (push) — multi-select with Apply
+            .navigationDestination(isPresented: $showAssignToPicker) {
+                MultiChildPickerScreen(
+                    allChildren: appState.children,
+                    preselected: multiSelectedChildIds,
+                    onApply: { pickedSet in
+                        // Choose a primary: keep current if still present, else A→Z first
+                        let aToZ = appState.children
+                            .filter { pickedSet.contains($0.id) }
+                            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                        if pickedSet.contains(assignedChildId) {
+                            assignedChildId = assignedChildId
+                        } else {
+                            assignedChildId = aToZ.first?.id ?? assignedChildId
+                        }
+                        multiSelectedChildIds = pickedSet
+                    }
+                )
+            }
 
-                // Backup current UISegmentedControl appearance
+            // Segmented appearance scoping
+            .onAppear {
                 prevSegTitleAttrsNormal   = UISegmentedControl.appearance().titleTextAttributes(for: .normal)
                 prevSegTitleAttrsSelected = UISegmentedControl.appearance().titleTextAttributes(for: .selected)
                 prevSelectedTintColor     = UISegmentedControl.appearance().selectedSegmentTintColor
 
-                // Selected segment: dark text on white pill
                 let selectedTitleAttrs: [NSAttributedString.Key: Any] = [
                     .foregroundColor: UIColor(Color(red: 0.08, green: 0.14, blue: 0.24)),
                     .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
                 ]
-                // Unselected segment: bright, readable light text
                 let normalTitleAttrs: [NSAttributedString.Key: Any] = [
                     .foregroundColor: UIColor(FuturistTheme.textPrimary.opacity(0.92)),
                     .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
@@ -1069,7 +1375,6 @@ struct EditTaskAssignmentView: View {
                 UISegmentedControl.appearance().selectedSegmentTintColor = .white
             }
             .onDisappear {
-                // Restore previous appearance so other screens are unaffected
                 if let prev = prevSegTitleAttrsNormal   { UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .normal) }
                 if let prev = prevSegTitleAttrsSelected { UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .selected) }
                 if let prev = prevSelectedTintColor     { UISegmentedControl.appearance().selectedSegmentTintColor = prev }

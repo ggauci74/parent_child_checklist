@@ -284,33 +284,36 @@ struct ChildHomeView: View {
                     )
                     .padding(.horizontal)
 
-                    Text(listTitleText)
-                        .font(.system(size: nameFontSize, weight: .regular))
-                        .foregroundStyle(FuturistTheme.textPrimary)
-                        .padding(.top, 2)
-
-                    HStack(spacing: 12) {
-                        ChipArrowButton(
-                            systemName: "chevron.backward.circle.fill",
-                            action: { goLeft() },
-                            disabled: !canGoBack
+                    // ===== Title row aligned with new glass arrows
+                    HStack(alignment: .center, spacing: 8) {
+                        GlassArrowButton(
+                            systemName: "chevron.left",
+                            disabled: !canGoBack,
+                            action: { if canGoBack { goLeft() } }
                         )
-                        .accessibilityLabel(relativeSelection == .today ? "Go to Yesterday" : "Go to Previous Day")
-
-                        Text(currentDateText)
-                            .font(.subheadline)
-                            .foregroundStyle(FuturistTheme.textSecondary)
+                        Spacer(minLength: 8)
+                        Text(listTitleText)
+                            .font(.system(size: nameFontSize, weight: .regular))
+                            .foregroundStyle(FuturistTheme.textPrimary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
-
-                        ChipArrowButton(
-                            systemName: "chevron.forward.circle.fill",
-                            action: { goRight() },
-                            disabled: !canGoForward
+                        Spacer(minLength: 8)
+                        GlassArrowButton(
+                            systemName: "chevron.right",
+                            disabled: !canGoForward,
+                            action: { if canGoForward { goRight() } }
                         )
-                        .accessibilityLabel(relativeSelection == .today ? "Go to Tomorrow" : "Go to Next Day")
                     }
-                    .padding(.top, 6)
+                    .padding(.top, 2)
+                    .padding(.horizontal, 16)   // ← NEW: horizontal buffer from screen edges
+
+                    // ===== Date line beneath (no arrows on this row)
+                    Text(currentDateText)
+                        .font(.subheadline)
+                        .foregroundStyle(FuturistTheme.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .padding(.top, 6)
 
                     selectedDayContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -595,25 +598,40 @@ private extension ChildHomeView {
     }
 }
 
-// MARK: - Blue Chip Arrow Button (present/next-day controls)
-private struct ChipArrowButton: View {
-    let systemName: String
-    let action: () -> Void
+// MARK: - Glass Arrow Button (matches parent-style circular arrows)
+private struct GlassArrowButton: View {
+    let systemName: String            // "chevron.left" or "chevron.right"
     let disabled: Bool
+    let action: () -> Void
+
+    @State private var pressed = false
 
     var body: some View {
-        Button(action: { if !disabled { action() } }) {
+        Button {
+            guard !disabled else { return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            withAnimation(.spring(response: 0.20, dampingFraction: 0.8)) { pressed = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                withAnimation(.spring(response: 0.30, dampingFraction: 0.9)) { pressed = false }
+            }
+            action()
+        } label: {
             Image(systemName: systemName)
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, Color.accentColor)
-                .font(.title3)
-                .frame(width: 44, height: 44)
-                .background(Color.accentColor.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(FuturistTheme.textPrimary)
+                .frame(width: 36, height: 36)
+                .background(Color.white.opacity(0.08))
+                .clipShape(Circle())
+                .overlay(
+                    Circle().stroke(FuturistTheme.textPrimary.opacity(0.20), lineWidth: 1)
+                )
+                .padding(4)                 // ← NEW: extra tap comfort (invisible halo)
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
+        .scaleEffect(pressed ? 0.90 : 1.0)
         .opacity(disabled ? 0.45 : 1.0)
+        .accessibilityLabel(systemName.contains("left") ? "Previous day" : "Next day")
         .disabled(disabled)
     }
 }

@@ -265,7 +265,7 @@ private struct InlineWheelTimePicker: View {
     }
 }
 
-// MARK: - Assign-To (PUSH) destination — same UI as the sheet version
+// MARK: - Assign-To (PUSH) destination — Futurist multi‑select with Apply
 private struct AssignToPickerScreen: View {
     let allChildren: [ChildProfile]
     let preselected: Set<UUID>
@@ -273,39 +273,201 @@ private struct AssignToPickerScreen: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var working: Set<UUID> = []
+    @State private var query: String = ""
+
+    private var filteredChildren: [ChildProfile] {
+        let sorted = allChildren.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return sorted }
+        return sorted.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    private var canApply: Bool { !working.isEmpty }
 
     var body: some View {
-        List {
-            ForEach(allChildren) { child in
-                Button {
-                    if working.contains(child.id) { working.remove(child.id) }
-                    else { working.insert(child.id) }
-                } label: {
-                    HStack(spacing: 12) {
-                        ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 32)
-                        Text(child.name)
-                        Spacer()
-                        Image(systemName: working.contains(child.id) ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(working.contains(child.id) ? Color.accentColor : Color.secondary)
+        ZStack(alignment: .top) {
+            CurvyAquaBlueBackground(animate: true).ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Search
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Search")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                            HStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                TextField("Find a child…", text: $query)
+                                    .textInputAutocapitalization(.words)
+                                    .autocorrectionDisabled(true)
+                                    .foregroundStyle(FuturistTheme.textPrimary)
+                            }
+                            .padding(10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                        }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+
+                    BrightLineSeparator()
+
+                    // Children list
+                    FrostedCard {
+                        VStack(spacing: 0) {
+                            ForEach(filteredChildren) { child in
+                                let checked = working.contains(child.id)
+                                Button {
+                                    toggle(child.id)
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 32)
+                                        Text(child.name)
+                                            .foregroundStyle(FuturistTheme.textPrimary)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(checked ? FuturistTheme.neonAqua : Color.white.opacity(0.45))
+                                            .accessibilityHidden(true)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(checked ? Color.white.opacity(0.06) : Color.clear)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(child.name), \(checked ? "selected" : "not selected")")
+
+                                if child.id != filteredChildren.last?.id {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.08))
+                                        .frame(height: 1)
+                                        .padding(.leading, 46) // align under avatar
+                                        .accessibilityHidden(true)
+                                }
+                            }
+
+                            if filteredChildren.isEmpty {
+                                Text("No matches")
+                                    .font(.footnote)
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    BrightLineSeparator()
+
+                    // Select All / Clear All
+                    FrostedCard {
+                        HStack(spacing: 12) {
+                            Button {
+                                working = Set(allChildren.map(\.id))
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Select All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                working.removeAll()
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Clear All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Spacer()
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    Spacer(minLength: 24)
                 }
-                .buttonStyle(.plain)
+                .padding(.bottom, 24)
             }
         }
-        .navigationTitle("Choose Children")
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarLeading) {
-                Button("Select All") { working = Set(allChildren.map(\.id)) }
-                Button("Clear All") { working.removeAll() }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") {
-                    onApply(working)
-                    dismiss()
+        // Hide system nav; themed top bar with Cancel/Apply
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            let pillWidth: CGFloat = 76
+            let pillHeight: CGFloat = 32
+
+            ZStack {
+                Text("Assign To")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+
+                HStack {
+                    ToolbarPillButton(
+                        label: "Cancel",
+                        foreground: .white,
+                        background: FuturistTheme.softRedLight,
+                        stroke: FuturistTheme.softRedBase.opacity(0.75),
+                        fixedWidth: pillWidth,
+                        fixedHeight: pillHeight,
+                        action: { dismiss() }
+                    )
+
+                    Spacer(minLength: 12)
+
+                    ToolbarPillButton(
+                        label: "Apply",
+                        foreground: canApply ? Color.black.opacity(0.9) : FuturistTheme.textSecondary,
+                        background: canApply ? FuturistTheme.softGreenLight : Color.clear,
+                        stroke: canApply ? FuturistTheme.softGreenBase.opacity(0.75)
+                                         : FuturistTheme.textSecondary.opacity(0.35),
+                        disabled: !canApply,
+                        glow: canApply,
+                        fixedWidth: pillWidth,
+                        fixedHeight: pillHeight,
+                        action: {
+                            guard canApply else { return }
+                            onApply(working)
+                            dismiss()
+                        }
+                    )
                 }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
+            .background(Color.clear)
         }
         .onAppear { working = preselected }
+    }
+
+    private func toggle(_ id: UUID) {
+        if working.contains(id) { working.remove(id) } else { working.insert(id) }
     }
 }
 
@@ -626,459 +788,462 @@ struct AssignEventToChildView: View {
     // MARK: - Body
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .top) {
-                CurvyAquaBlueBackground(animate: true)
-                    .ignoresSafeArea()
+            ZZZBody
+        }
+    }
 
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // 1) EVENT CARD — order: Select Event → Active → Add helper note
-                        FrostedCard {
-                            Button {
-                                showSelectEvent = true
-                            } label: {
-                                HStack(alignment: .top, spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        if let tpl = selectedTemplate {
-                                            // Selected state (emoji + title + helper line)
-                                            HStack(spacing: 10) {
-                                                TaskEmojiIconView(icon: tpl.iconSymbol, size: 22)
-                                                Text(tpl.title)
-                                                    .font(.headline)
-                                                    .foregroundStyle(FuturistTheme.textPrimary)
-                                            }
-                                            Text("Tap to change")
-                                                .font(.footnote)
-                                                .foregroundStyle(FuturistTheme.textSecondary)
-                                        } else {
-                                            // Empty state — “Select Event” to match Assign Task
-                                            Text("Select Event")
+    // Extracted for readability
+    private var ZZZBody: some View {
+        ZStack(alignment: .top) {
+            CurvyAquaBlueBackground(animate: true)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    // 1) EVENT CARD — order: Select Event → Active → Add helper note
+                    FrostedCard {
+                        Button {
+                            showSelectEvent = true
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    if let tpl = selectedTemplate {
+                                        // Selected state (emoji + title + helper line)
+                                        HStack(spacing: 10) {
+                                            TaskEmojiIconView(icon: tpl.iconSymbol, size: 22)
+                                            Text(tpl.title)
                                                 .font(.headline)
                                                 .foregroundStyle(FuturistTheme.textPrimary)
-                                            Text("Tap to choose an event")
-                                                .font(.footnote)
-                                                .foregroundStyle(FuturistTheme.textSecondary)
                                         }
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(FuturistTheme.textSecondary)
-                                        .padding(.top, 2)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityHint("Opens event templates")
-
-                            // ✅ Active toggle — ONLY visible once an event is chosen
-                            if selectedTemplate != nil {
-                                ToggleRow(title: "Active", isOn: $isActive, titleColor: FuturistTheme.textSecondary)
-                            }
-
-                            // Helper collapsible — AFTER Active (parity with Assign Task)
-                            VStack(alignment: .leading, spacing: 8) {
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.18)) { showHelperEditor.toggle() }
-                                } label: {
-                                    HStack {
-                                        if helperText.isEmpty {
-                                            Text("Add helper note").foregroundStyle(FuturistTheme.textSecondary)
-                                        } else {
-                                            Text("Helper note").foregroundStyle(FuturistTheme.textPrimary)
-                                            Spacer()
-                                            Text(helperText)
-                                                .lineLimit(1)
-                                                .foregroundStyle(FuturistTheme.textSecondary)
-                                        }
-                                        Spacer()
-                                        Image(systemName: showHelperEditor ? "chevron.up" : "chevron.down")
+                                        Text("Tap to change")
+                                            .font(.footnote)
+                                            .foregroundStyle(FuturistTheme.textSecondary)
+                                    } else {
+                                        // Empty state — “Select Event” to match Assign Task
+                                        Text("Select Event")
+                                            .font(.headline)
+                                            .foregroundStyle(FuturistTheme.textPrimary)
+                                        Text("Tap to choose an event")
+                                            .font(.footnote)
                                             .foregroundStyle(FuturistTheme.textSecondary)
                                     }
                                 }
-                                .buttonStyle(.plain)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                    .padding(.top, 2)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Opens event templates")
 
-                                if showHelperEditor {
-                                    TextField("Type helper text...", text: $helperText, axis: .vertical)
-                                        .lineLimit(4, reservesSpace: true)
-                                        .textInputAutocapitalization(.sentences)
-                                        .submitLabel(.done)
-                                        .foregroundStyle(FuturistTheme.textPrimary)
-                                    HStack {
+                        // ✅ Active toggle — ONLY visible once an event is chosen
+                        if selectedTemplate != nil {
+                            ToggleRow(title: "Active", isOn: $isActive, titleColor: FuturistTheme.textSecondary)
+                        }
+
+                        // Helper collapsible — AFTER Active (parity with Assign Task)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.18)) { showHelperEditor.toggle() }
+                            } label: {
+                                HStack {
+                                    if helperText.isEmpty {
+                                        Text("Add helper note").foregroundStyle(FuturistTheme.textSecondary)
+                                    } else {
+                                        Text("Helper note").foregroundStyle(FuturistTheme.textPrimary)
                                         Spacer()
-                                        if !helperText.isEmpty {
-                                            Button("Clear") { helperText.removeAll() }
-                                                .font(.footnote)
-                                                .foregroundStyle(FuturistTheme.textSecondary)
-                                        }
+                                        Text(helperText)
+                                            .lineLimit(1)
+                                            .foregroundStyle(FuturistTheme.textSecondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: showHelperEditor ? "chevron.up" : "chevron.down")
+                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+
+                            if showHelperEditor {
+                                TextField("Type helper text...", text: $helperText, axis: .vertical)
+                                    .lineLimit(4, reservesSpace: true)
+                                    .textInputAutocapitalization(.sentences)
+                                    .submitLabel(.done)
+                                    .foregroundStyle(FuturistTheme.textPrimary)
+                                HStack {
+                                    Spacer()
+                                    if !helperText.isEmpty {
+                                        Button("Clear") { helperText.removeAll() }
+                                            .font(.footnote)
+                                            .foregroundStyle(FuturistTheme.textSecondary)
                                     }
                                 }
                             }
                         }
-                        .padding(.horizontal, 12)
+                    }
+                    .padding(.horizontal, 12)
 
-                        BrightLineSeparator()
+                    BrightLineSeparator()
 
-                        // 2) ASSIGN TO — PUSH (left→right)
-                        FrostedCard {
-                            Button { goToChooseChildren = true } label: {
+                    // 2) ASSIGN TO — PUSH (left→right)
+                    FrostedCard {
+                        Button { goToChooseChildren = true } label: {
+                            HStack {
+                                Text("Assign To").foregroundStyle(FuturistTheme.textPrimary)
+                                Spacer()
+                                Text(assignToSummaryText).foregroundStyle(FuturistTheme.textSecondary)
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12)
+
+                    BrightLineSeparator()
+
+                    // 3) LOCATION (Optional) — PUSH (left→right)
+                    FrostedCard {
+                        Button { goToChooseLocation = true } label: {
+                            HStack {
+                                Text("Location (Optional)").foregroundStyle(FuturistTheme.textPrimary)
+                                Spacer()
+                                let displayName = selectedLocationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
+                                Text(displayName.isEmpty ? "None" : displayName)
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12)
+
+                    BrightLineSeparator()
+
+                    // 4) DATES (inline graphical)
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            // START DATE row
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    showStartDateInline.toggle()
+                                    if showStartDateInline {
+                                        showFinishDateInline = false
+                                        showStartTimeInline = false
+                                        showFinishTimeInline = false
+                                    }
+                                }
+                            } label: {
                                 HStack {
-                                    Text("Assign To").foregroundStyle(FuturistTheme.textPrimary)
+                                    Text("Start Date").foregroundStyle(FuturistTheme.textPrimary)
                                     Spacer()
-                                    Text(assignToSummaryText).foregroundStyle(FuturistTheme.textSecondary)
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                    ValueChip(text: dateString(startDate))
                                 }
                             }
                             .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 12)
 
-                        BrightLineSeparator()
-
-                        // 3) LOCATION (Optional) — NOW PUSH (left→right)
-                        FrostedCard {
-                            Button { goToChooseLocation = true } label: {
-                                HStack {
-                                    Text("Location (Optional)").foregroundStyle(FuturistTheme.textPrimary)
-                                    Spacer()
-                                    let displayName = selectedLocationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    Text(displayName.isEmpty ? "None" : displayName)
-                                        .foregroundStyle(FuturistTheme.textSecondary)
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(FuturistTheme.textSecondary)
-                                }
+                            if showStartDateInline {
+                                InlineGraphicalCalendar(label: "Start Date", date: $startDate, range: todayDay...)
+                                    .onChange(of: startDate) { _, _ in enforceNoPastScheduling() }
                             }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 12)
 
-                        BrightLineSeparator()
+                            // FINISH DATE toggle + row
+                            ToggleRow(title: "Finish Date", isOn: $finishDateEnabled)
+                                .onChange(of: finishDateEnabled) { _, enabled in
+                                    if !enabled {
+                                        withAnimation(.easeInOut(duration: 0.18)) { showFinishDateInline = false }
+                                    }
+                                    enforceNoPastScheduling()
+                                }
 
-                        // 4) DATES (inline graphical)
-                        FrostedCard {
-                            VStack(alignment: .leading, spacing: 10) {
-                                // START DATE row
+                            if finishDateEnabled {
                                 Button {
                                     withAnimation(.easeInOut(duration: 0.18)) {
-                                        showStartDateInline.toggle()
-                                        if showStartDateInline {
-                                            showFinishDateInline = false
+                                        showFinishDateInline.toggle()
+                                        if showFinishDateInline {
+                                            showStartDateInline = false
                                             showStartTimeInline = false
                                             showFinishTimeInline = false
                                         }
                                     }
                                 } label: {
                                     HStack {
-                                        Text("Start Date").foregroundStyle(FuturistTheme.textPrimary)
+                                        Text("Finish Date").foregroundStyle(FuturistTheme.textPrimary)
                                         Spacer()
-                                        ValueChip(text: dateString(startDate))
+                                        ValueChip(text: dateString(finishDate))
                                     }
                                 }
                                 .buttonStyle(.plain)
 
-                                if showStartDateInline {
-                                    InlineGraphicalCalendar(label: "Start Date", date: $startDate, range: todayDay...)
-                                        .onChange(of: startDate) { _, _ in enforceNoPastScheduling() }
-                                }
-
-                                // FINISH DATE toggle + row
-                                ToggleRow(title: "Finish Date", isOn: $finishDateEnabled)
-                                    .onChange(of: finishDateEnabled) { _, enabled in
-                                        if !enabled {
-                                            withAnimation(.easeInOut(duration: 0.18)) { showFinishDateInline = false }
-                                        }
-                                        enforceNoPastScheduling()
-                                    }
-
-                                if finishDateEnabled {
-                                    Button {
-                                        withAnimation(.easeInOut(duration: 0.18)) {
-                                            showFinishDateInline.toggle()
-                                            if showFinishDateInline {
-                                                showStartDateInline = false
-                                                showStartTimeInline = false
-                                                showFinishTimeInline = false
-                                            }
-                                        }
-                                    } label: {
-                                        HStack {
-                                            Text("Finish Date").foregroundStyle(FuturistTheme.textPrimary)
-                                            Spacer()
-                                            ValueChip(text: dateString(finishDate))
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    if showFinishDateInline {
-                                        InlineGraphicalCalendar(label: "Finish Date", date: $finishDate, range: startDate...)
-                                            .onChange(of: finishDate) { _, _ in enforceNoPastScheduling() }
-                                    }
+                                if showFinishDateInline {
+                                    InlineGraphicalCalendar(label: "Finish Date", date: $finishDate, range: startDate...)
+                                        .onChange(of: finishDate) { _, _ in enforceNoPastScheduling() }
                                 }
                             }
                         }
-                        .padding(.horizontal, 12)
+                    }
+                    .padding(.horizontal, 12)
 
-                        BrightLineSeparator()
+                    BrightLineSeparator()
 
-                        // 5) OCCURRENCE (segmented + chips)
-                        FrostedCard {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Picker("Occurrence", selection: $occurrence) {
-                                    ForEach(EventAssignment.Occurrence.allCases) { opt in
-                                        Text(opt.displayName).tag(opt)
+                    // 5) OCCURRENCE (segmented + chips)
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Picker("Occurrence", selection: $occurrence) {
+                                ForEach(EventAssignment.Occurrence.allCases) { opt in
+                                    Text(opt.displayName).tag(opt)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .onChange(of: occurrence) { _, newValue in
+                                if newValue == .onceOnly {
+                                    finishDateEnabled = false
+                                    withAnimation(.easeInOut(duration: 0.18)) { showFinishDateInline = false }
+                                }
+                                enforceNoPastScheduling()
+                            }
+
+                            if occurrence == .specifiedDays {
+                                let allowed = allowedWeekdays
+                                HStack(spacing: 6) {
+                                    ForEach(0..<7, id: \.self) { idx in
+                                        weekdayChipCompact(
+                                            index: idx,
+                                            label: weekdayLabels[idx],
+                                            isSelected: selectedWeekdays.contains(idx),
+                                            isAllowed: allowed.contains(idx)
+                                        )
                                     }
                                 }
-                                .pickerStyle(.segmented)
-                                .onChange(of: occurrence) { _, newValue in
-                                    if newValue == .onceOnly {
-                                        finishDateEnabled = false
-                                        withAnimation(.easeInOut(duration: 0.18)) { showFinishDateInline = false }
+                                .onChange(of: selectedWeekdays) { _, _ in enforceNoPastScheduling() }
+
+                                Text(allowedHintText(for: allowed))
+                                    .font(.footnote)
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                            }
+                        }
+                        .foregroundStyle(FuturistTheme.textPrimary)
+                    }
+                    .padding(.horizontal, 12)
+
+                    BrightLineSeparator()
+
+                    // 6) TIME (inline wheels + notify)
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            // START TIME
+                            ToggleRow(title: "Start Time", isOn: $startTimeEnabled)
+                                .onChange(of: startTimeEnabled) { _, enabled in
+                                    if !enabled {
+                                        withAnimation(.easeInOut(duration: 0.18)) { showStartTimeInline = false }
+                                        startNotifyEnabled = false
+                                        skipTodayInfo = nil
+                                    } else {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            showStartDateInline = false
+                                            showFinishDateInline = false
+                                            showFinishTimeInline = false
+                                        }
                                     }
                                     enforceNoPastScheduling()
                                 }
 
-                                if occurrence == .specifiedDays {
-                                    let allowed = allowedWeekdays
-                                    HStack(spacing: 6) {
-                                        ForEach(0..<7, id: \.self) { idx in
-                                            weekdayChipCompact(
-                                                index: idx,
-                                                label: weekdayLabels[idx],
-                                                isSelected: selectedWeekdays.contains(idx),
-                                                isAllowed: allowed.contains(idx)
-                                            )
+                            if startTimeEnabled {
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        showStartTimeInline.toggle()
+                                        if showStartTimeInline {
+                                            showStartDateInline = false
+                                            showFinishDateInline = false
+                                            showFinishTimeInline = false
                                         }
                                     }
-                                    .onChange(of: selectedWeekdays) { _, _ in enforceNoPastScheduling() }
-
-                                    Text(allowedHintText(for: allowed))
-                                        .font(.footnote)
-                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                } label: {
+                                    HStack {
+                                        Text("Start Time").foregroundStyle(FuturistTheme.textPrimary)
+                                        Spacer()
+                                        ValueChip(text: timeString(startTime))
+                                    }
                                 }
-                            }
-                            .foregroundStyle(FuturistTheme.textPrimary)
-                        }
-                        .padding(.horizontal, 12)
+                                .buttonStyle(.plain)
 
-                        BrightLineSeparator()
+                                if showStartTimeInline {
+                                    InlineWheelTimePicker(label: "Start Time", time: $startTime)
+                                        .onChange(of: startTime) { _, _ in enforceNoPastScheduling() }
+                                }
 
-                        // 6) TIME (inline wheels + notify)
-                        FrostedCard {
-                            VStack(alignment: .leading, spacing: 10) {
-                                // START TIME
-                                ToggleRow(title: "Start Time", isOn: $startTimeEnabled)
-                                    .onChange(of: startTimeEnabled) { _, enabled in
-                                        if !enabled {
-                                            withAnimation(.easeInOut(duration: 0.18)) { showStartTimeInline = false }
-                                            startNotifyEnabled = false
-                                            skipTodayInfo = nil
-                                        } else {
-                                            withAnimation(.easeInOut(duration: 0.18)) {
-                                                showStartDateInline = false
-                                                showFinishDateInline = false
-                                                showFinishTimeInline = false
-                                            }
+                                // Notify (Start)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ToggleRow(title: "Notify Me", isOn: $startNotifyEnabled)
+                                    if startNotifyEnabled {
+                                        Picker("Who", selection: $startNotifyRecipient) {
+                                            ForEach(NotifyRecipient.allCases) { Text($0.displayName).tag($0) }
                                         }
-                                        enforceNoPastScheduling()
-                                    }
+                                        .pickerStyle(.segmented)
 
-                                if startTimeEnabled {
-                                    Button {
-                                        withAnimation(.easeInOut(duration: 0.18)) {
-                                            showStartTimeInline.toggle()
-                                            if showStartTimeInline {
-                                                showStartDateInline = false
-                                                showFinishDateInline = false
-                                                showFinishTimeInline = false
-                                            }
+                                        Picker("When", selection: $startNotifyOffsetMinutes) {
+                                            ForEach(notifyOffsetOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
                                         }
-                                    } label: {
-                                        HStack {
-                                            Text("Start Time").foregroundStyle(FuturistTheme.textPrimary)
-                                            Spacer()
-                                            ValueChip(text: timeString(startTime))
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
 
-                                    if showStartTimeInline {
-                                        InlineWheelTimePicker(label: "Start Time", time: $startTime)
-                                            .onChange(of: startTime) { _, _ in enforceNoPastScheduling() }
-                                    }
-
-                                    // Notify (Start)
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        ToggleRow(title: "Notify Me", isOn: $startNotifyEnabled)
-                                        if startNotifyEnabled {
-                                            Picker("Who", selection: $startNotifyRecipient) {
-                                                ForEach(NotifyRecipient.allCases) { Text($0.displayName).tag($0) }
-                                            }
-                                            .pickerStyle(.segmented)
-
-                                            Picker("When", selection: $startNotifyOffsetMinutes) {
-                                                ForEach(notifyOffsetOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
-                                            }
-
-                                            if let msg = skipTodayInfo {
-                                                Text(msg).font(.footnote).foregroundStyle(FuturistTheme.textSecondary)
-                                            }
+                                        if let msg = skipTodayInfo {
+                                            Text(msg).font(.footnote).foregroundStyle(FuturistTheme.textSecondary)
                                         }
                                     }
                                 }
+                            }
 
-                                // Divider
-                                Rectangle().fill(FuturistTheme.divider).frame(height: 1).accessibilityHidden(true)
+                            // Divider
+                            Rectangle().fill(FuturistTheme.divider).frame(height: 1).accessibilityHidden(true)
 
-                                // FINISH TIME
-                                ToggleRow(title: "Finish Time", isOn: $finishTimeEnabled)
-                                    .onChange(of: finishTimeEnabled) { _, enabled in
-                                        if !enabled {
-                                            withAnimation(.easeInOut(duration: 0.18)) { showFinishTimeInline = false }
-                                            finishNotifyEnabled = false
-                                        } else {
-                                            withAnimation(.easeInOut(duration: 0.18)) {
-                                                showStartDateInline = false
-                                                showFinishDateInline = false
-                                                showStartTimeInline = false
-                                            }
-                                        }
-                                        enforceNoPastScheduling()
-                                    }
-
-                                if finishTimeEnabled {
-                                    Button {
+                            // FINISH TIME
+                            ToggleRow(title: "Finish Time", isOn: $finishTimeEnabled)
+                                .onChange(of: finishTimeEnabled) { _, enabled in
+                                    if !enabled {
+                                        withAnimation(.easeInOut(duration: 0.18)) { showFinishTimeInline = false }
+                                        finishNotifyEnabled = false
+                                    } else {
                                         withAnimation(.easeInOut(duration: 0.18)) {
-                                            showFinishTimeInline.toggle()
-                                            if showFinishTimeInline {
-                                                showStartDateInline = false
-                                                showFinishDateInline = false
-                                                showStartTimeInline = false
-                                            }
-                                        }
-                                    } label: {
-                                        HStack {
-                                            Text("Finish Time").foregroundStyle(FuturistTheme.textPrimary)
-                                            Spacer()
-                                            ValueChip(text: timeString(finishTime))
+                                            showStartDateInline = false
+                                            showFinishDateInline = false
+                                            showStartTimeInline = false
                                         }
                                     }
-                                    .buttonStyle(.plain)
+                                    enforceNoPastScheduling()
+                                }
 
-                                    if showFinishTimeInline {
-                                        InlineWheelTimePicker(label: "Finish Time", time: $finishTime)
-                                            .onChange(of: finishTime) { _, _ in enforceNoPastScheduling() }
+                            if finishTimeEnabled {
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        showFinishTimeInline.toggle()
+                                        if showFinishTimeInline {
+                                            showStartDateInline = false
+                                            showFinishDateInline = false
+                                            showStartTimeInline = false
+                                        }
                                     }
+                                } label: {
+                                    HStack {
+                                        Text("Finish Time").foregroundStyle(FuturistTheme.textPrimary)
+                                        Spacer()
+                                        ValueChip(text: timeString(finishTime))
+                                    }
+                                }
+                                .buttonStyle(.plain)
 
-                                    // Notify (Finish)
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        ToggleRow(title: "Notify Me", isOn: $finishNotifyEnabled)
-                                        if finishNotifyEnabled {
-                                            Picker("Who", selection: $finishNotifyRecipient) {
-                                                ForEach(NotifyRecipient.allCases) { Text($0.displayName).tag($0) }
-                                            }
-                                            .pickerStyle(.segmented)
+                                if showFinishTimeInline {
+                                    InlineWheelTimePicker(label: "Finish Time", time: $finishTime)
+                                        .onChange(of: finishTime) { _, _ in enforceNoPastScheduling() }
+                                }
 
-                                            Picker("When", selection: $finishNotifyOffsetMinutes) {
-                                                ForEach(notifyOffsetOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
-                                            }
+                                // Notify (Finish)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ToggleRow(title: "Notify Me", isOn: $finishNotifyEnabled)
+                                    if finishNotifyEnabled {
+                                        Picker("Who", selection: $finishNotifyRecipient) {
+                                            ForEach(NotifyRecipient.allCases) { Text($0.displayName).tag($0) }
+                                        }
+                                        .pickerStyle(.segmented)
+
+                                        Picker("When", selection: $finishNotifyOffsetMinutes) {
+                                            ForEach(notifyOffsetOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
                                         }
                                     }
                                 }
                             }
                         }
-                        .padding(.horizontal, 12)
-
-                        BrightLineSeparator()
-
-                        Spacer(minLength: 12)
                     }
-                    .padding(.top, 12)
-                    .padding(.bottom, 24)
-                }
+                    .padding(.horizontal, 12)
 
-                if let localToastMessage {
-                    ToastBannerView(message: localToastMessage)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .zIndex(10)
-                }
-            }
-            // Hide system nav bar; draw own header
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationBarTitleDisplayMode(.inline)
+                    BrightLineSeparator()
 
-            // Custom top bar
-            .safeAreaInset(edge: .top, spacing: 0) {
-                AssignTopBar(
-                    canSave: canSave,
-                    onCancel: {
-                        parentSelectedTab = "children"
-                        dismiss()
-                    },
-                    onSave: {
-                        if canSave { saveAssignment() }
-                    }
-                )
-                .background(Color.clear)
-            }
-            .onAppear {
-                enforceNoPastScheduling()
-                handlePastTimeOnTodayIfNeeded()
-
-                // ⬇️ NEW: Scoped UISegmentedControl styling for higher-contrast unselected labels
-                prevSegTitleAttrsNormal  = UISegmentedControl.appearance().titleTextAttributes(for: .normal)
-                prevSegTitleAttrsSelected = UISegmentedControl.appearance().titleTextAttributes(for: .selected)
-                prevSelectedTintColor     = UISegmentedControl.appearance().selectedSegmentTintColor
-
-                // Selected segment: dark text on white pill (semibold)
-                let selectedTitleAttrs: [NSAttributedString.Key: Any] = [
-                    .foregroundColor: UIColor(Color(red: 0.08, green: 0.14, blue: 0.24)),
-                    .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
-                ]
-                // Unselected segment: brighter text (~96% white), semibold for legibility
-                let normalTitleAttrs: [NSAttributedString.Key: Any] = [
-                    .foregroundColor: UIColor(FuturistTheme.textPrimary.opacity(0.96)),
-                    .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
-                ]
-                UISegmentedControl.appearance().setTitleTextAttributes(normalTitleAttrs, for: .normal)
-                UISegmentedControl.appearance().setTitleTextAttributes(selectedTitleAttrs, for: .selected)
-                UISegmentedControl.appearance().selectedSegmentTintColor = .white
-            }
-            .onDisappear {
-                // Restore prior segmented control appearance
-                if let prev = prevSegTitleAttrsNormal {
-                    UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .normal)
+                    Spacer(minLength: 12)
                 }
-                if let prev = prevSegTitleAttrsSelected {
-                    UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .selected)
-                }
-                if let prev = prevSelectedTintColor {
-                    UISegmentedControl.appearance().selectedSegmentTintColor = prev
-                }
+                .padding(.top, 12)
+                .padding(.bottom, 24)
             }
 
-            // Destinations / PUSH routes
-            .navigationDestination(isPresented: $showSelectEvent) {
-                SelectEventTemplateView(
-                    selectedTemplateId: selectedTemplate?.id,
-                    onPick: { picked in selectedTemplate = picked }
-                )
-                .environmentObject(appState)
+            if let localToastMessage {
+                ToastBannerView(message: localToastMessage)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(10)
             }
-            .navigationDestination(isPresented: $goToChooseChildren) {
-                AssignToPickerScreen(
-                    allChildren: appState.children,
-                    preselected: selectedChildIds,
-                    onApply: { newSelection in selectedChildIds = newSelection }
-                )
+        }
+        // Hide system nav bar; draw own header
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+
+        // Custom top bar
+        .safeAreaInset(edge: .top, spacing: 0) {
+            AssignTopBar(
+                canSave: canSave,
+                onCancel: {
+                    parentSelectedTab = "children"
+                    dismiss()
+                },
+                onSave: {
+                    if canSave { saveAssignment() }
+                }
+            )
+            .background(Color.clear)
+        }
+        .onAppear {
+            enforceNoPastScheduling()
+            handlePastTimeOnTodayIfNeeded()
+
+            // ⬇️ Scoped UISegmentedControl styling (parity with Task)
+            prevSegTitleAttrsNormal  = UISegmentedControl.appearance().titleTextAttributes(for: .normal)
+            prevSegTitleAttrsSelected = UISegmentedControl.appearance().titleTextAttributes(for: .selected)
+            prevSelectedTintColor     = UISegmentedControl.appearance().selectedSegmentTintColor
+
+            let selectedTitleAttrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: UIColor(Color(red: 0.08, green: 0.14, blue: 0.24)),
+                .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
+            ]
+            let normalTitleAttrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: UIColor(FuturistTheme.textPrimary.opacity(0.96)),
+                .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
+            ]
+            UISegmentedControl.appearance().setTitleTextAttributes(normalTitleAttrs, for: .normal)
+            UISegmentedControl.appearance().setTitleTextAttributes(selectedTitleAttrs, for: .selected)
+            UISegmentedControl.appearance().selectedSegmentTintColor = .white
+        }
+        .onDisappear {
+            // Restore prior segmented control appearance
+            if let prev = prevSegTitleAttrsNormal {
+                UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .normal)
             }
-            .navigationDestination(isPresented: $goToChooseLocation) {
-                // SelectLocationView already contains its own NavigationStack internally.
-                // We can present it directly; its internal dismiss() will pop this push.
-                SelectLocationView(
-                    selectedLocationId: $selectedLocationId,
-                    selectedLocationNameSnapshot: $selectedLocationNameSnapshot
-                )
-                .environmentObject(appState)
+            if let prev = prevSegTitleAttrsSelected {
+                UISegmentedControl.appearance().setTitleTextAttributes(prev, for: .selected)
             }
+            if let prev = prevSelectedTintColor {
+                UISegmentedControl.appearance().selectedSegmentTintColor = prev
+            }
+        }
+
+        // Destinations / PUSH routes
+        .navigationDestination(isPresented: $showSelectEvent) {
+            SelectEventTemplateView(
+                selectedTemplateId: selectedTemplate?.id,
+                onPick: { picked in selectedTemplate = picked }
+            )
+            .environmentObject(appState)
+        }
+        .navigationDestination(isPresented: $goToChooseChildren) {
+            AssignToPickerScreen(
+                allChildren: appState.children,
+                preselected: selectedChildIds,
+                onApply: { newSelection in selectedChildIds = newSelection }
+            )
+        }
+        .navigationDestination(isPresented: $goToChooseLocation) {
+            // SelectLocationView already contains its own NavigationStack internally.
+            // We can present it directly; its internal dismiss() will pop this push.
+            SelectLocationView(
+                selectedLocationId: $selectedLocationId,
+                selectedLocationNameSnapshot: $selectedLocationNameSnapshot
+            )
+            .environmentObject(appState)
         }
     }
 

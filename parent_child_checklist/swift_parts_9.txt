@@ -1,276 +1,4 @@
-Meta"
-        static let emojiLibrary     = "EmojiLibrary"
-        static let childProfile     = "ChildProfile"
-        static let taskTemplate     = "TaskTemplate"
-        static let taskAssignment   = "TaskAssignment"
-        static let taskCompletion   = "TaskCompletionRecord"
-        static let locationItem     = "LocationItem"
-        static let eventTemplate    = "EventTemplate"
-        static let eventAssignment  = "EventAssignment"
-    }
-
-    // MARK: - Common Fields
-    enum Common {
-        static let id            = "id"            // String UUID
-        static let createdAt     = "createdAt"     // Date
-        static let updatedAt     = "updatedAt"     // Date
-        static let schemaVersion = "schemaVersion" // Int
-    }
-
-    // MARK: - FamilyMeta Fields
-    enum FamilyMeta {
-        static let title         = "title"         // String
-        static let createdAt     = "createdAt"     // Date
-        static let schemaVersion = "schemaVersion" // Int
-    }
-
-    // MARK: - EmojiLibrary Fields
-    enum EmojiLibrary {
-        static let emojis    = "emojis"    // [String]
-        static let updatedAt = "updatedAt" // Date
-    }
-
-    // MARK: - ChildProfile Fields
-    enum ChildProfile {
-        static let id        = Common.id
-        static let name      = "name"      // String
-        static let colorHex  = "colorHex"  // String
-        static let avatarId  = "avatarId"  // String? (store as String, omit if nil)
-        static let updatedAt = Common.updatedAt
-    }
-
-    // MARK: - TaskTemplate Fields
-    enum TaskTemplate {
-        static let id          = Common.id
-        static let title       = "title"       // String
-        static let iconSymbol  = "iconSymbol"  // String
-        static let rewardPoints = "rewardPoints" // Int
-        static let createdAt   = "createdAt"   // Date
-    }
-
-    // MARK: - TaskAssignment Fields
-    enum TaskAssignment {
-        static let id                        = Common.id
-        static let childId                   = "childId" // String UUID
-        static let templateId                = "templateId" // String? UUID
-
-        // Snapshot
-        static let taskTitle                 = "taskTitle" // String
-        static let taskIcon                  = "taskIcon"  // String
-        static let rewardPoints              = "rewardPoints" // Int
-        static let helper                    = "helper" // String?
-
-        // Options
-        static let subtractIfNotCompleted    = "subtractIfNotCompleted" // Bool
-        static let alertMe                   = "alertMe" // Bool
-        static let photoEvidenceRequired     = "photoEvidenceRequired" // Bool
-        static let isActive                  = "isActive" // Bool
-
-        // Dates
-        static let startDate                 = "startDate" // Date
-        static let endDate                   = "endDate"   // Date?
-
-        // Schedule
-        static let occurrence                = "occurrence" // String rawValue
-        static let weekdays                  = "weekdays"   // [Int] as [NSNumber]
-
-        // Time windows
-        static let startTime                 = "startTime"  // Date?
-        static let finishTime                = "finishTime" // Date?
-
-        // Duration
-        static let durationMinutes           = "durationMinutes" // Int?
-
-        // Linked event
-        static let linkedEventAssignmentId   = "linkedEventAssignmentId" // String? UUID
-
-        // NEW: Notify (Start)
-        static let startNotifyEnabled        = "startNotifyEnabled" // Bool
-        static let startNotifyRecipient      = "startNotifyRecipient" // String (NotifyRecipient.rawValue)
-        static let startNotifyOffsetMinutes  = "startNotifyOffsetMinutes" // Int?
-
-        // NEW: Notify (Finish)
-        static let finishNotifyEnabled       = "finishNotifyEnabled" // Bool
-        static let finishNotifyRecipient     = "finishNotifyRecipient" // String (NotifyRecipient.rawValue)
-        static let finishNotifyOffsetMinutes = "finishNotifyOffsetMinutes" // Int?
-
-        // Audit
-        static let createdAt                 = Common.createdAt
-        static let updatedAt                 = Common.updatedAt
-    }
-
-    // MARK: - TaskCompletionRecord Fields
-    enum TaskCompletionRecord {
-        static let id          = Common.id
-        static let assignmentId = "assignmentId" // String UUID
-        static let day         = "day"          // Date (start-of-day)
-        static let completedAt = "completedAt"  // Date?
-        // NEW (Option A): single CKAsset for full-size photo evidence
-        static let photoAsset  = "photoAsset"   // CKAsset?
-    }
-
-    // MARK: - LocationItem Fields
-    enum LocationItem {
-        static let id        = Common.id
-        static let name      = "name"      // String
-        static let createdAt = Common.createdAt
-        static let updatedAt = Common.updatedAt
-    }
-
-    // MARK: - EventTemplate Fields
-    enum EventTemplate {
-        static let id         = Common.id
-        static let title      = "title"      // String
-        static let iconSymbol = "iconSymbol" // String
-        static let createdAt  = Common.createdAt
-        static let updatedAt  = Common.updatedAt
-    }
-
-    // MARK: - EventAssignment Fields
-    enum EventAssignment {
-        static let id                        = Common.id
-        static let childId                   = "childId" // String UUID
-        static let templateId                = "templateId" // String? UUID
-
-        // Snapshot
-        static let eventTitle                = "eventTitle" // String
-        static let eventIcon                 = "eventIcon"  // String
-        static let helper                    = "helper"     // String?
-        static let isActive                  = "isActive"   // Bool
-
-        // Schedule
-        static let startDate                 = "startDate" // Date
-        static let endDate                   = "endDate"   // Date?
-        static let occurrence                = "occurrence" // String rawValue
-        static let weekdays                  = "weekdays"   // [Int] as [NSNumber]
-
-        // Time
-        static let startTime                 = "startTime"  // Date?
-        static let finishTime                = "finishTime" // Date?
-        static let durationMinutes           = "durationMinutes" // Int?
-
-        // Location
-        static let locationId                = "locationId" // String? UUID
-        static let locationNameSnapshot      = "locationNameSnapshot" // String
-
-        // Legacy single “alert before start” (kept)
-        static let alertMe                   = "alertMe" // Bool
-        static let alertOffsetMinutes        = "alertOffsetMinutes" // Int?
-
-        // NEW: Notify (Start)
-        static let startNotifyEnabled        = "startNotifyEnabled" // Bool
-        static let startNotifyRecipient      = "startNotifyRecipient" // String (NotifyRecipient.rawValue)
-        static let startNotifyOffsetMinutes  = "startNotifyOffsetMinutes" // Int?
-
-        // NEW: Notify (Finish)
-        static let finishNotifyEnabled       = "finishNotifyEnabled" // Bool
-        static let finishNotifyRecipient     = "finishNotifyRecipient" // String (NotifyRecipient.rawValue)
-        static let finishNotifyOffsetMinutes = "finishNotifyOffsetMinutes" // Int?
-
-        // Audit
-        static let createdAt                 = Common.createdAt
-        static let updatedAt                 = Common.updatedAt
-    }
-}
-
-/// Utilities for consistent zone + record IDs.
-enum CKID {
-    static func familyZoneID(ownerName: String = CKCurrentUserDefaultName) -> CKRecordZone.ID {
-        CKRecordZone.ID(zoneName: CKSchema.familyZoneName, ownerName: ownerName)
-    }
-    static func recordID(type: String, uuid: UUID, zoneID: CKRecordZone.ID) -> CKRecord.ID {
-        CKRecord.ID(recordName: "\(type)_\(uuid.uuidString)", zoneID: zoneID)
-    }
-}
-
-
-===== ./SelectLinkedEventAssignmentView.swift =====
-
-//
-// SelectLinkedEventAssignmentView.swift
-// parent_child_checklist
-//
-// Select an active EventAssignment for a given child, filtered to those occurring
-// on or after a minimum start date.
-//
-// IMPORTANT:
-// - For once-only events: use startDate >= minimumStartDate
-// - For recurring events (.specifiedDays): allow events that started earlier,
-//   as long as they still have an occurrence on/after minimumStartDate.
-//
-
-import SwiftUI
-
-struct SelectLinkedEventAssignmentView: View {
-    let childId: UUID
-    let minimumStartDate: Date
-
-    @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
-
-    @Binding var selectedEventAssignmentId: UUID?
-    @State private var searchText: String = ""
-
-    // ISO-like calendar (Monday-first) for consistent day-only comparisons
-    private var isoCalendar: Calendar {
-        var cal = Calendar(identifier: .iso8601)
-        cal.timeZone = .current
-        return cal
-    }
-
-    private func dayOnly(_ date: Date) -> Date {
-        isoCalendar.startOfDay(for: date)
-    }
-
-    // Monday-first weekday index: 0=Mon ... 6=Sun
-    private func weekdayIndexMondayFirst(for date: Date) -> Int {
-        let weekday = isoCalendar.component(.weekday, from: date)
-        switch weekday {
-        case 2: return 0 // Mon
-        case 3: return 1 // Tue
-        case 4: return 2 // Wed
-        case 5: return 3 // Thu
-        case 6: return 4 // Fri
-        case 7: return 5 // Sat
-        default: return 6 // Sun
-        }
-    }
-
-    /// Returns the next day (start-of-day) on or after `fromDay` that this recurring event occurs.
-    /// If the event doesn't occur anymore (e.g., endDate before match), returns nil.
-    private func nextOccurrenceDay(for ev: EventAssignment, onOrAfter fromDay: Date) -> Date? {
-        guard ev.occurrence == .specifiedDays else {
-            return dayOnly(ev.startDate)
-        }
-
-        let startWindow = max(dayOnly(ev.startDate), fromDay)
-        let endWindow = ev.endDate.map(dayOnly)
-
-        // If recurring but already ended before our window
-        if let endWindow, endWindow < startWindow { return nil }
-
-        // Need at least one weekday selected
-        if ev.weekdays.isEmpty { return nil }
-
-        // Find the next matching day within the next 14 days (2 weeks is safe for weekly patterns)
-        // This keeps the logic simple and robust.
-        for offset in 0..<14 {
-            guard let candidate = isoCalendar.date(byAdding: .day, value: offset, to: startWindow) else { continue }
-            let candDay = dayOnly(candidate)
-
-            if let endWindow, candDay > endWindow { return nil }
-
-            let w = weekdayIndexMondayFirst(for: candDay)
-            if ev.weekdays.contains(w) {
-                return candDay
-            }
-        }
-
-        // If nothing matched within 2 weeks, treat it as non-occurring (very unlikely unless weekdays empty)
-        return nil
-    }
-
-    /// Whether an event is linkable given the rules:
+ linkable given the rules:
     /// - must be the same child
     /// - must be active
     /// - must have an occurrence on/after minimumStartDate
@@ -582,11 +310,202 @@ struct ParentEventsTabView: View {
 //  SelectEventTemplateView.swift
 //  parent_child_checklist
 //
-//  Created by George Gauci on 8/2/2026.
+//  UPDATED: Extra‑compact tiles (height 64), visible trailing actions (Edit + …)
+//  - Non-breathing layout (ScrollView + LazyVStack)
+//  - Same frosted cards, neon filament separators, and header as before
 //
 
 import SwiftUI
+import UIKit
 
+// MARK: - Futurist theme tokens (parity with your other screens)
+private enum FuturistTheme {
+    static let neonAqua       = Color(red: 0.20, green: 0.95, blue: 1.00)
+    static let textPrimary    = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary  = Color.white.opacity(0.78)
+    static let cardStroke     = Color.white.opacity(0.08)
+    static let cardShadow     = Color.black.opacity(0.10)
+
+    static let softRedBase    = Color(red: 1.00, green: 0.36, blue: 0.43)
+    static let softGreenBase  = Color(red: 0.27, green: 0.89, blue: 0.54)
+    static let softRedLight   = Color(red: 1.00, green: 0.58, blue: 0.63)
+    static let softGreenLight = Color(red: 0.62, green: 0.95, blue: 0.73)
+}
+
+// MARK: - Row metrics (compact, aligned with Select Task)
+private enum EventRowMetrics {
+    static let pageHPad: CGFloat     = 12
+    static let cornerRadius: CGFloat = 14
+    static let innerHPad: CGFloat    = 16
+
+    // EXTRA‑COMPACT tile height (was 92 → now 64)
+    static let rowHeight: CGFloat    = 64
+
+    // Chevron (kept if you want a disclosure feel; currently not shown)
+    static let chevronSize: CGFloat  = 16
+    static let chevronTint           = Color.white.opacity(0.85)
+
+    // Right inset so trailing actions align with content
+    static let innerTrailing: CGFloat = 12
+
+    // Separator-only spacing
+    static let firstRowTopPad: CGFloat       = 2
+    static let betweenRowsTopPad: CGFloat    = 0
+    static let separatorVerticalPad: CGFloat = 0
+}
+
+// MARK: - Frosted card surface (same as Task/Location)
+private struct EventFrostedSurface<ShapeContent: InsettableShape>: View {
+    let shape: ShapeContent
+    var shadowRadius: CGFloat = 4
+    var shadowYOffset: CGFloat = 1
+
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private var surface: some ShapeStyle {
+        reduceTransparency
+        ? Color(red: 0.05, green: 0.10, blue: 0.22)
+        : Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+    }
+
+    var body: some View {
+        shape.fill(surface)
+            .overlay(shape.stroke(FuturistTheme.cardStroke, lineWidth: 1))
+            .shadow(color: FuturistTheme.cardShadow, radius: shadowRadius, x: 0, y: shadowYOffset)
+    }
+}
+
+// MARK: - Cyan filament separator
+private struct EventBrightLineSeparator: View {
+    var leadingInset: CGFloat = 16
+    var trailingInset: CGFloat = 14
+    var thickness: CGFloat = 2
+
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.95), location: 0.00),
+                .init(color: FuturistTheme.neonAqua,                                      location: 0.50),
+                .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.95),     location: 1.00),
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(height: thickness)
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, leadingInset)
+        .padding(.trailing, trailingInset)
+        .padding(.horizontal, EventRowMetrics.pageHPad)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Tiles
+
+/// Compact tile (Search)
+private struct EventCompactTile<Content: View>: View {
+    let content: () -> Content
+    init(@ViewBuilder content: @escaping () -> Content) { self.content = content }
+
+    var body: some View {
+        HStack(spacing: 10) { content() }
+            .frame(height: 56)
+            .padding(.horizontal, EventRowMetrics.innerHPad)
+            .background(
+                EventFrostedSurface(
+                    shape: RoundedRectangle(cornerRadius: EventRowMetrics.cornerRadius, style: .continuous)
+                )
+            )
+    }
+}
+
+/// Event row tile — extra‑compact height
+private struct EventTile<Content: View>: View {
+    let content: () -> Content
+    init(@ViewBuilder content: @escaping () -> Content) { self.content = content }
+
+    var body: some View {
+        HStack(spacing: 12) { content() }
+            .frame(height: EventRowMetrics.rowHeight)
+            .padding(.horizontal, EventRowMetrics.innerHPad)
+            .background(
+                EventFrostedSurface(
+                    shape: RoundedRectangle(cornerRadius: EventRowMetrics.cornerRadius, style: .continuous),
+                    shadowRadius: 4, shadowYOffset: 1
+                )
+            )
+    }
+}
+
+// MARK: - Delete confirmation (mirrors Location copy & style)
+private struct EventDeleteConfirmSheet: View {
+    @Binding var isPresented: Bool
+    let title: String
+    let message: String
+    var onDelete: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea().onTapGesture { isPresented = false }
+
+            VStack(spacing: 14) {
+                Text(title)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(FuturistTheme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(FuturistTheme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 12) {
+                    Button {
+                        isPresented = false
+                    } label: {
+                        Text("Cancel")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).padding(.vertical, 10)
+                            .background(Capsule().fill(FuturistTheme.softRedLight))
+                            .overlay(Capsule().stroke(FuturistTheme.softRedBase.opacity(0.75), lineWidth: 1))
+                            .shadow(color: FuturistTheme.cardShadow, radius: 3)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                        onDelete()
+                        isPresented = false
+                    } label: {
+                        Text("Delete")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Color.black.opacity(0.9))
+                            .frame(maxWidth: .infinity).padding(.vertical, 10)
+                            .background(Capsule().fill(Color.white))
+                            .overlay(Capsule().stroke(Color.white.opacity(0.85), lineWidth: 1))
+                            .shadow(color: FuturistTheme.cardShadow, radius: 3)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, 4)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.85))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(FuturistTheme.cardStroke, lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.25), radius: 10, x: 0, y: 4)
+            .padding(.horizontal, 24)
+            .transition(.scale.combined(with: .opacity))
+        }
+        .animation(.easeInOut(duration: 0.18), value: isPresented)
+    }
+}
+
+// MARK: - Main
 struct SelectEventTemplateView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -596,10 +515,16 @@ struct SelectEventTemplateView: View {
 
     @State private var searchText: String = ""
 
-    // NEW: add/create + edit states
+    // Add/Edit
     @State private var showAddTemplate = false
     @State private var editingTemplate: EventTemplate? = nil
 
+    // Delete confirm
+    @State private var showDeletePrompt: Bool = false
+    @State private var pendingDelete: EventTemplate? = nil
+    @State private var pendingDeleteUsageCount: Int = 0
+
+    // Data
     private var templates: [EventTemplate] {
         let sorted = appState.eventTemplates.sorted {
             $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
@@ -609,102 +534,233 @@ struct SelectEventTemplateView: View {
         return sorted.filter { $0.title.localizedCaseInsensitiveContains(q) }
     }
 
+    // Delete messages (mirror Location tone)
+    private var deleteAlertTitle: String {
+        guard let tpl = pendingDelete else { return "Delete Event" }
+        return "Delete “\(tpl.title)”?"
+    }
+    private var deleteAlertMessage: String {
+        guard pendingDeleteUsageCount > 0 else {
+            return "This will remove the event template from your list. This action cannot be undone."
+        }
+        let n = pendingDeleteUsageCount
+        let plural = n == 1 ? "assignment" : "assignments"
+        return "This event template is currently used by \(n) \(plural). Deleting it will not remove existing assignments, but you won’t be able to use this template again. This cannot be undone."
+    }
+
+    // Count how many assignments use a template
+    private func usageCount(for templateId: UUID) -> Int {
+        appState.eventAssignments.filter { $0.templateId == templateId }.count
+    }
+
+    // Delete confirmed
+    private func performDeleteConfirmed() {
+        guard let tpl = pendingDelete else { return }
+        _ = appState.deleteEventTemplate(id: tpl.id)
+        pendingDelete = nil
+        pendingDeleteUsageCount = 0
+        showDeletePrompt = false
+    }
+
     var body: some View {
-        List {
-            if templates.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("No events yet.")
-                        .font(.headline)
-                    Text("Tap the + in the top‑right to create your first event template.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 8)
-            } else {
-                ForEach(templates) { tpl in
-                    Button {
-                        onPick(tpl)
-                        dismiss()
-                    } label: {
-                        HStack(spacing: 12) {
-                            TaskEmojiIconView(icon: tpl.iconSymbol, size: 22)
+        NavigationStack {
+            ZStack(alignment: .top) {
+                CurvyAquaBlueBackground(animate: true)
+                    .ignoresSafeArea()
 
-                            Text(tpl.title)
-                                .font(.headline)
+                // CONTENT (header provided by safeAreaInset below)
+                ScrollView {
+                    VStack(spacing: 0) {
 
-                            Spacer()
-
-                            if selectedTemplateId == tpl.id {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.tint)
+                        // SEARCH + HEADER
+                        VStack(spacing: 8) {
+                            EventCompactTile {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "magnifyingglass")
+                                        .foregroundStyle(FuturistTheme.textPrimary.opacity(0.92))
+                                    TextField(
+                                        "",
+                                        text: $searchText,
+                                        prompt: Text("Search")
+                                            .foregroundStyle(FuturistTheme.textPrimary.opacity(0.92))
+                                    )
+                                    .textInputAutocapitalization(.none)
+                                    .foregroundStyle(FuturistTheme.textPrimary)
+                                    .tint(FuturistTheme.neonAqua)
+                                }
                             }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button {
-                            editingTemplate = tpl
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
-                        }
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button {
-                            editingTemplate = tpl
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
-                        }
-                        .tint(.blue)
-                    }
-                }
-            }
-        }
-        .navigationTitle("Select Event")
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Close") { dismiss() }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showAddTemplate = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.headline)
-                        .accessibilityLabel("New Event Template")
-                }
-            }
-        }
 
-        // NEW: Create flow
-        .sheet(isPresented: $showAddTemplate) {
-            AddEventTemplateView(
-                onSaved: { created in
-                    onPick(created)
-                    dismiss()
-                },
-                onCancel: {
-                    // No-op; just close the sheet
-                }
-            )
-            .environmentObject(appState)
-        }
+                            Text("Events")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, EventRowMetrics.pageHPad)
+                        .padding(.top, 12)
 
-        // NEW: Edit flow
-        .sheet(item: $editingTemplate) { tpl in
-            EditEventTemplateView(
-                template: tpl,
-                onSaved: { updated in
-                    onPick(updated)
-                    dismiss()
-                },
-                onCancel: {
-                    // No-op; just close the sheet
+                        // EVENTS LIST (separator-only spacing)
+                        if templates.isEmpty {
+                            Text("No events yet. Tap + to create one.")
+                                .font(.subheadline)
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 8)
+                        } else {
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(templates.enumerated()), id: \.element.id) { idx, tpl in
+                                    // ---- Row tile with visible action cluster (Edit + More) ----
+                                    EventTile {
+                                        HStack(spacing: 12) {
+                                            // Icon + title
+                                            TaskEmojiIconView(icon: tpl.iconSymbol, size: 20)
+
+                                            Text(tpl.title)
+                                                .font(.headline)
+                                                .foregroundStyle(FuturistTheme.textPrimary)
+                                                .lineLimit(2)
+
+                                            Spacer(minLength: 10)
+
+                                            // Action cluster: Edit + More (Delete inside)
+                                            HStack(spacing: 10) {
+                                                Button {
+                                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                                    editingTemplate = tpl
+                                                } label: {
+                                                    Text("Edit")
+                                                        .font(.footnote.weight(.semibold))
+                                                        .foregroundStyle(Color.white)
+                                                        .padding(.horizontal, 10)
+                                                        .padding(.vertical, 5) // compact to fit 64-pt row
+                                                        .background(Color.white.opacity(0.12), in: Capsule())
+                                                        .overlay(
+                                                            Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                                                        )
+                                                }
+                                                .buttonStyle(.plain)
+                                                .accessibilityLabel("Edit event “\(tpl.title)”")
+
+                                                Menu {
+                                                    Button(role: .destructive) {
+                                                        pendingDelete = tpl
+                                                        pendingDeleteUsageCount = usageCount(for: tpl.id)
+                                                        showDeletePrompt = true
+                                                    } label: {
+                                                        Label("Delete", systemImage: "trash")
+                                                    }
+                                                } label: {
+                                                    Image(systemName: "ellipsis.circle")
+                                                        .font(.title3)
+                                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                                        .padding(.horizontal, 2)
+                                                }
+                                                .accessibilityLabel("More actions for “\(tpl.title)”")
+                                            }
+                                        }
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            // Tap anywhere on the tile (except buttons) selects the template
+                                            onPick(tpl)
+                                            dismiss()
+                                        }
+                                    }
+                                    .padding(.horizontal, EventRowMetrics.pageHPad)
+                                    .padding(.top, idx == 0 ? EventRowMetrics.firstRowTopPad
+                                                            : EventRowMetrics.betweenRowsTopPad)
+
+                                    if idx < templates.count - 1 {
+                                        EventBrightLineSeparator()
+                                            .padding(.vertical, EventRowMetrics.separatorVerticalPad)
+                                    }
+                                }
+                            }
+                            .padding(.bottom, 24)
+                        }
+                    }
                 }
-            )
-            .environmentObject(appState)
+
+                // Delete confirm sheet
+                if showDeletePrompt {
+                    EventDeleteConfirmSheet(
+                        isPresented: $showDeletePrompt,
+                        title: deleteAlertTitle,
+                        message: deleteAlertMessage,
+                        onDelete: { performDeleteConfirmed() }
+                    )
+                    .zIndex(20)
+                    .transition(.opacity)
+                }
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
+
+            // Header (Close / title / ＋) via safeAreaInset — identical to Location/Task
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ZStack {
+                    Text("Select Event")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(FuturistTheme.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+
+                    HStack {
+                        let pillWidth: CGFloat = 76
+                        let pillHeight: CGFloat = 32
+
+                        Text("Close")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.white)
+                            .frame(width: pillWidth, height: pillHeight)
+                            .background(Capsule().fill(FuturistTheme.softRedLight))
+                            .overlay(Capsule().stroke(FuturistTheme.softRedBase.opacity(0.75), lineWidth: 1))
+                            .shadow(color: FuturistTheme.cardShadow, radius: 3)
+                            .contentShape(Capsule())
+                            .onTapGesture { dismiss() }
+
+                        Spacer(minLength: 12)
+
+                        Text("+")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(Color.black.opacity(0.9))
+                            .frame(width: pillWidth, height: pillHeight)
+                            .background(Capsule().fill(FuturistTheme.softGreenLight))
+                            .overlay(Capsule().stroke(FuturistTheme.softGreenBase.opacity(0.75), lineWidth: 1))
+                            .shadow(color: FuturistTheme.cardShadow, radius: 3)
+                            .contentShape(Capsule())
+                            .onTapGesture { showAddTemplate = true }
+                            .accessibilityLabel(Text("New Event Template"))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                }
+                .background(Color.clear)
+            }
+
+            // Create
+            .sheet(isPresented: $showAddTemplate) {
+                AddEventTemplateView(
+                    onSaved: { created in
+                        onPick(created)
+                        dismiss()
+                    },
+                    onCancel: { }
+                )
+                .environmentObject(appState)
+            }
+
+            // Edit
+            .sheet(item: $editingTemplate) { tpl in
+                EditEventTemplateView(
+                    template: tpl,
+                    onSaved: { updated in
+                        onPick(updated)
+                        dismiss()
+                    },
+                    onCancel: { }
+                )
+                .environmentObject(appState)
+            }
         }
     }
 }
@@ -769,11 +825,40 @@ struct PointsEntry: Identifiable, Hashable, Codable {
 //
 
 import SwiftUI
+import UIKit // for subtle haptics on tap
 
 // MARK: - Role Model
 enum UserRole: String {
   case parent
   case child
+}
+
+// MARK: - Day-only utilities (ISO yyyy-MM-dd in @AppStorage)
+// We persist just the day (no time). These helpers keep all logic consistent.
+fileprivate extension Calendar {
+  static var appCal: Calendar {
+    var cal = Calendar(identifier: .iso8601)
+    cal.timeZone = .current
+    return cal
+  }
+}
+fileprivate func dayOnly(_ date: Date) -> Date {
+  Calendar.appCal.startOfDay(for: date)
+}
+fileprivate func parseStoredDay(_ isoYYYYMMDD: String?) -> Date? {
+  guard let s = isoYYYYMMDD, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+  let df = DateFormatter()
+  df.calendar = Calendar.appCal
+  df.locale = .current
+  df.timeZone = .current
+  df.dateFormat = "yyyy-MM-dd"
+  return df.date(from: s).map { dayOnly($0) }
+}
+fileprivate func effectiveDefaultStartDate(from storedDayISO: String?) -> Date {
+  let today = dayOnly(Date())
+  guard let picked = parseStoredDay(storedDayISO) else { return today }
+  // If the picked day is in the future or today, use it; if it's in the past, clamp to today.
+  return max(today, picked)
 }
 
 // MARK: - App Root
@@ -890,6 +975,8 @@ private struct ParentAssignTaskScreen: View {
   @EnvironmentObject private var appState: AppState
   @AppStorage("lastParentChildId") private var lastParentChildIdRaw: String?
   @AppStorage("selectedChildId") private var selectedChildIdRaw: String?
+  // ⬇️ Day persisted by the Parent weekly view (as "yyyy-MM-dd")
+  @AppStorage("lastParentSelectedDay") private var lastParentSelectedDayISO: String?
 
   var body: some View {
     Group {
@@ -898,13 +985,18 @@ private struct ParentAssignTaskScreen: View {
         lastParentChildIdRaw: lastParentChildIdRaw,
         selectedChildIdRaw: selectedChildIdRaw
       ) {
+        let effective = effectiveDefaultStartDate(from: lastParentSelectedDayISO)
+
         AssignTaskToChildView(
           childId: cid,
-          defaultStartDate: Date(),
+          defaultStartDate: effective,
           onShowWeeklyToast: { _ in }
         )
+        // ⬇️ Force a fresh instance when the effective default day changes
+        .id(effective)
         .environmentObject(appState)
-        // ✅ No `.id(openToken)` and no refresh-on-appear: drafts persist until Cancel/Save
+        // ✅ No `.id(openToken)` and no refresh-on-appear: drafts persist until Cancel/Save,
+        //    except when the day changes (intentional for this feature).
       } else {
         NoChildrenHintView(title: "Assign Task")
       }
@@ -917,6 +1009,8 @@ private struct ParentAssignEventScreen: View {
   @EnvironmentObject private var appState: AppState
   @AppStorage("lastParentChildId") private var lastParentChildIdRaw: String?
   @AppStorage("selectedChildId") private var selectedChildIdRaw: String?
+  // ⬇️ Day persisted by the Parent weekly view (as "yyyy-MM-dd")
+  @AppStorage("lastParentSelectedDay") private var lastParentSelectedDayISO: String?
 
   var body: some View {
     Group {
@@ -925,11 +1019,15 @@ private struct ParentAssignEventScreen: View {
         lastParentChildIdRaw: lastParentChildIdRaw,
         selectedChildIdRaw: selectedChildIdRaw
       ) {
+        let effective = effectiveDefaultStartDate(from: lastParentSelectedDayISO)
+
         AssignEventToChildView(
           childId: cid,
-          defaultStartDate: Date(),
+          defaultStartDate: effective,
           onShowWeeklyToast: { _ in }
         )
+        // ⬇️ Force a fresh instance when the effective default day changes
+        .id(effective)
         .environmentObject(appState)
       } else {
         NoChildrenHintView(title: "Assign Event")
@@ -963,57 +1061,207 @@ private struct NoChildrenHintView: View {
 // MARK: - Role Selection (onboarding entry)
 struct RoleSelectionView: View {
   @AppStorage("userRole") private var userRoleRawValue: String?
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  // MARK: Local Futurist tokens (scoped to this view to avoid collisions)
+  private enum WelcomeTheme {
+    static let neonAqua = Color(red: 0.20, green: 0.95, blue: 1.00)
+    static let textPrimary = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary = Color.white.opacity(0.78)
+    static let cardStroke = Color.white.opacity(0.08)
+    static let cardShadow = Color.black.opacity(0.10)
+    static let surfaceSolid = Color(red: 0.05, green: 0.10, blue: 0.22)
+    static let surfaceFrost = Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+  }
+
+  // MARK: Local frosted card (safe reduceTransparency)
+  private struct WelcomeFrostedCard<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    let content: () -> Content
+    init(@ViewBuilder content: @escaping () -> Content) { self.content = content }
+    var body: some View {
+      let fill = reduceTransparency ? WelcomeTheme.surfaceSolid : WelcomeTheme.surfaceFrost
+      return VStack(alignment: .leading, spacing: 10) { content() }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .background(
+          RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(fill)
+        )
+        .overlay(
+          RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .stroke(WelcomeTheme.cardStroke, lineWidth: 1)
+        )
+        .shadow(color: WelcomeTheme.cardShadow, radius: 4, x: 0, y: 1)
+    }
+  }
+
+  // MARK: Neon filament separator
+  private struct WelcomeBrightLineSeparator: View {
+    var leadingInset: CGFloat = 16
+    var trailingInset: CGFloat = 14
+    var thickness: CGFloat = 2
+    var body: some View {
+      LinearGradient(
+        gradient: Gradient(stops: [
+          .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.95), location: 0.00),
+          .init(color: WelcomeTheme.neonAqua, location: 0.50),
+          .init(color: Color(red: 0.02, green: 0.06, blue: 0.16).opacity(0.95), location: 1.00),
+        ]),
+        startPoint: .leading,
+        endPoint: .trailing
+      )
+      .frame(height: thickness)
+      .clipShape(Capsule())
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.leading, leadingInset)
+      .padding(.trailing, trailingInset)
+      .accessibilityHidden(true)
+    }
+  }
+
+  // MARK: Emoji tile (fallback frosted square)
+  @ViewBuilder
+  private func emojiTile(_ emoji: String) -> some View {
+    Text(emoji)
+      .font(.system(size: 22))
+      .frame(width: 34, height: 34)
+      .background(
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .fill(Color.white.opacity(0.06))
+      )
+      .overlay(
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .stroke(Color.white.opacity(0.20), lineWidth: 1)
+      )
+  }
 
   var body: some View {
     NavigationStack {
-      VStack(spacing: 18) {
-        Spacer()
-        Text("Welcome 👋")
-          .font(.largeTitle)
-          .fontWeight(.heavy)
-        Text("Choose who you are to get started")
-          .foregroundStyle(.secondary)
+      ZStack(alignment: .top) {
+        // Background
+        CurvyAquaBlueBackground(animate: !reduceMotion)
+          .ignoresSafeArea()
 
-        VStack(spacing: 12) {
-          Button {
-            userRoleRawValue = UserRole.parent.rawValue
-          } label: {
-            HStack {
-              Text("👨‍👩‍👧‍👦").font(.title2)
-              Text("I'm a Parent").fontWeight(.semibold)
-              Spacer()
-              Image(systemName: "chevron.right").foregroundStyle(.secondary)
+        // Content (role selection)
+        ScrollView {
+          VStack(spacing: 0) {
+            // Prompt (centered, with space under the big Welcome)
+            Text("Select your role – Parent or Child")
+              .font(.title3.weight(.semibold))
+              .foregroundStyle(WelcomeTheme.textPrimary)
+              .multilineTextAlignment(.center)
+              .frame(maxWidth: .infinity)
+              .padding(.top, 20)
+              .padding(.horizontal, 16)
+
+            // ——— Role Cards ———
+            // (No neon line below the prompt)
+
+            // Parent card (starts further down)
+            WelcomeFrostedCard {
+              Button(action: roleParent) {
+                HStack(spacing: 12) {
+                  emojiTile("👨‍👩‍👧‍👦")
+                    .accessibilityHidden(true)
+                  Text("I'm a Parent")
+                    .font(.headline)
+                    .foregroundStyle(WelcomeTheme.textPrimary)
+                  Spacer(minLength: 8)
+                }
+                .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("I'm a Parent")
             }
-            .padding()
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 20)
+
+            // Thin neon separator between the role cards
+            WelcomeBrightLineSeparator()
+              .padding(.horizontal, 12)
+              .padding(.vertical, 0)
+
+            // Child card — pushed up so ONLY the line separates them
+            WelcomeFrostedCard {
+              Button(action: roleChild) {
+                HStack(spacing: 12) {
+                  emojiTile("🧒")
+                    .accessibilityHidden(true)
+                  Text("I'm a Child")
+                    .font(.headline)
+                    .foregroundStyle(WelcomeTheme.textPrimary)
+                  Spacer(minLength: 8)
+                }
+                .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("I'm a Child")
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 0)   // ⬅️ no extra space after the separator
+
+            Spacer(minLength: 120) // breathing room above the bottom tip on tall screens
           }
-
-          Button {
-            userRoleRawValue = UserRole.child.rawValue
-          } label: {
-            HStack {
-              Text("🧒").font(.title2)
-              Text("I'm a Child").fontWeight(.semibold)
-              Spacer()
-              Image(systemName: "chevron.right").foregroundStyle(.secondary)
-            }
-            .padding()
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+          .padding(.bottom, 24)
+        }
+      }
+      // Hide the default nav bar; render a Futurist title in the safe-area inset
+      .toolbar(.hidden, for: .navigationBar)
+      .navigationBarTitleDisplayMode(.inline)
+      // Larger, confident header title
+      .safeAreaInset(edge: .top, spacing: 0) {
+        let topSpacer: CGFloat = 8
+        ZStack {
+          Text("Welcome 👋")
+            .font(.system(size: 40, weight: .bold))
+            .foregroundStyle(WelcomeTheme.textPrimary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+          VStack(spacing: 0) {
+            Color.clear.frame(height: topSpacer)
+            HStack { Spacer() }
+              .padding(.horizontal, 12)
+              .padding(.bottom, 8)
           }
         }
-        .padding(.horizontal)
-
-        Spacer()
-
-        Text("Tip: parents create tasks and events, kids tick them off ✅")
-          .font(.footnote)
-          .foregroundStyle(.secondary)
-          .padding(.bottom, 20)
+        .background(Color.clear)
       }
-      .padding()
-      .navigationTitle("")
-      .navigationBarTitleDisplayMode(.inline)
+      // Bottom tip, separated from role choices and anchored near the bottom
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        WelcomeFrostedCard {
+          // Larger, centered, two-line tip; no tick icon
+          Text("Tip: parents create tasks and events,\n kids tick them off")
+            .font(.callout.weight(.semibold))     // larger than footnote
+            .foregroundStyle(WelcomeTheme.textSecondary)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .background(.clear)
+      }
     }
+  }
+
+  // MARK: - Actions
+  private func roleParent() {
+    triggerTapHaptic()
+    userRoleRawValue = UserRole.parent.rawValue
+  }
+
+  private func roleChild() {
+    triggerTapHaptic()
+    userRoleRawValue = UserRole.child.rawValue
+  }
+
+  private func triggerTapHaptic() {
+    #if canImport(UIKit)
+    let generator = UIImpactFeedbackGenerator(style: .light)
+    generator.prepare()
+    generator.impactOccurred()
+    #endif
   }
 }
 
@@ -1981,126 +2229,333 @@ struct ShareSheet: UIViewControllerRepresentable {
 // ParentChildrenTabView.swift
 // parent_child_checklist
 //
-// Created by George Gauci on 10/2/2026.
+// Updated: header + button now uses soft‑green pill with black plus icon
 //
 
 import SwiftUI
 
-struct ParentChildrenTabView: View {
-  @AppStorage("userRole") private var userRoleRawValue: String?
-  @AppStorage("selectedChildId") private var selectedChildIdRaw: String?
-  // 🔹 Optional: write last viewed child as soon as parent taps a child
-  @AppStorage("lastParentChildId") private var lastParentChildIdRaw: String?
+// MARK: - Futurist theme tokens (aligned with other screens)
+private enum FuturistTheme {
+    static let skyTop = Color(red: 0.02, green: 0.06, blue: 0.16)
+    static let skyBottom = Color(red: 0.01, green: 0.03, blue: 0.10)
+    static let neonAqua = Color(red: 0.20, green: 0.95, blue: 1.00)
 
-  @EnvironmentObject private var appState: AppState
-  @State private var showAddChild = false
-  @State private var childPendingDelete: ChildProfile?
-  @State private var childPendingEdit: ChildProfile?
+    static let textPrimary = Color(red: 0.92, green: 0.97, blue: 1.00)
+    static let textSecondary = Color.white.opacity(0.78)
 
-  var body: some View {
-    NavigationStack {
-      List {
-        Section("Children") {
-          ForEach(appState.children) { child in
-            NavigationLink {
-              ParentChildWeeklyView(childId: child.id)
-                .environmentObject(appState)
-            } label: {
-              HStack(spacing: 12) {
-                ChildAvatarCircleView(
-                  colorHex: child.colorHex,
-                  avatarId: child.avatarId,
-                  size: 36
-                )
-                VStack(alignment: .leading, spacing: 2) {
-                  Text(child.name)
-                    .font(.headline)
-                  Text(child.avatarId == nil
-                       ? "Not chosen yet"
-                       : AvatarCatalog.avatar(for: child.avatarId).displayName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-              }
-              .padding(.vertical, 6)
-            }
-            // Eagerly capture the chosen child so Assign tabs default correctly
-            .simultaneousGesture(TapGesture().onEnded {
-              lastParentChildIdRaw = child.id.uuidString
-            })
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-              Button {
-                childPendingDelete = child
-              } label: {
-                Label("Delete", systemImage: "trash")
-              }
-              .tint(.red)
+    static let cardStroke = Color.white.opacity(0.08)
+    static let cardShadow = Color.black.opacity(0.10)
 
-              Button {
-                childPendingEdit = child
-              } label: {
-                Label("Edit", systemImage: "pencil")
-              }
-              .tint(.blue)
-            }
-          }
-        }
+    // Pastel pills (same palette used elsewhere)
+    static let softGreenBase  = Color(red: 0.27, green: 0.89, blue: 0.54)
+    static let softGreenLight = Color(red: 0.62, green: 0.95, blue: 0.73)
+}
 
-        Section {
-          Button("Switch Role (Temporary)") {
-            userRoleRawValue = nil
-            selectedChildIdRaw = nil
-          }
-          .foregroundStyle(.red)
-        }
-      }
-      // ── Title & + share the same line; we provide a custom, larger title
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        // Larger inline title (adjust size as you like; you mentioned 32 works well)
-        ToolbarItem(placement: .principal) {
-          Text("Parent")
-            .font(.system(size: 32, weight: .bold, design: .default))
-            .accessibilityAddTraits(.isHeader)
-        }
-        // Add (+) button on the right
-        ToolbarItem(placement: .topBarTrailing) {
-          Button {
-            showAddChild = true
-          } label: {
-            Image(systemName: "plus")
-              .font(.headline)
-          }
-          .accessibilityLabel("Add Child")
-        }
-      }
-      .sheet(isPresented: $showAddChild) {
-        AddChildView()
-          .environmentObject(appState)
-      }
-      .sheet(item: $childPendingEdit) { child in
-        EditChildView(child: child)
-          .environmentObject(appState)
-      }
-      .alert(
-        "Delete child?",
-        isPresented: Binding(
-          get: { childPendingDelete != nil },
-          set: { if !$0 { childPendingDelete = nil } }
-        )
-      ) {
-        Button("Delete", role: .destructive) {
-          if let child = childPendingDelete {
-            appState.deleteChild(id: child.id)
-          }
-          childPendingDelete = nil
-        }
-        Button("Cancel", role: .cancel) {
-          childPendingDelete = nil
-        }
-      } message: {
-        Text("This will remove the child and all their assignments and completion history.")
-      }
+// MARK: - Frosted card background
+private struct CardBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    var cornerRadius: CGFloat = 14
+    var body: some View {
+        let surface = reduceTransparency
+        ? Color(red: 0.05, green: 0.10, blue: 0.22)
+        : Color(red: 0.04, green: 0.08, blue: 0.18).opacity(0.70)
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(FuturistTheme.cardStroke, lineWidth: 1)
+            )
+            .shadow(color: FuturistTheme.cardShadow, radius: 6, x: 0, y: 2)
     }
-  }
+}
+
+// MARK: - Neon divider between rows
+private struct NeonRule: View {
+    var leadingInset: CGFloat = 16
+    var trailingInset: CGFloat = 14
+    var thickness: CGFloat = 2
+    var body: some View {
+        LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 0.00),
+                .init(color: FuturistTheme.neonAqua,             location: 0.50),
+                .init(color: FuturistTheme.skyTop.opacity(0.95), location: 1.00),
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(height: thickness)
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, leadingInset)
+        .padding(.trailing, trailingInset)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Soft‑green pill + with black icon (matches Select Task header)
+private struct GreenPillPlusButton: View {
+    let action: () -> Void
+    private let pillWidth: CGFloat = 76
+    private let pillHeight: CGFloat = 32
+
+    @State private var pressed = false
+
+    var body: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            withAnimation(.spring(response: 0.20, dampingFraction: 0.8)) { pressed = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                withAnimation(.spring(response: 0.30, dampingFraction: 0.9)) { pressed = false }
+            }
+            action()
+        } label: {
+            ZStack {
+                Capsule()
+                    .fill(FuturistTheme.softGreenLight)
+                    .overlay(
+                        Capsule().stroke(FuturistTheme.softGreenBase.opacity(0.75), lineWidth: 1)
+                    )
+                Image(systemName: "plus")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Color.black.opacity(0.9))
+            }
+            .frame(width: pillWidth, height: pillHeight)
+            .shadow(color: FuturistTheme.softGreenLight.opacity(0.28), radius: 3)
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(pressed ? 0.96 : 1.0)
+        .accessibilityLabel("Add Child")
+    }
+}
+
+// MARK: - One row — left: NavigationLink, right: action cluster (no swipe)
+private struct ParentChildRow: View {
+    let child: ChildProfile
+    let destination: () -> AnyView      // ParentChildWeeklyView wrapped into AnyView
+    let onTappedInto: () -> Void        // persist lastParentChildId, etc.
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            // LEFT tappable area navigates
+            NavigationLink {
+                destination()
+            } label: {
+                HStack(spacing: 12) {
+                    ChildAvatarCircleView(
+                        colorHex: child.colorHex,
+                        avatarId: child.avatarId,
+                        size: 36
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(child.name)
+                            .font(.headline)
+                            .foregroundStyle(FuturistTheme.textPrimary)
+                        let subtitle = child.avatarId == nil
+                          ? "Not chosen yet"
+                          : AvatarCatalog.avatar(for: child.avatarId).displayName
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(FuturistTheme.textSecondary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .simultaneousGesture(TapGesture().onEnded { onTappedInto() })
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 8)
+
+            // RIGHT trailing action cluster — centered vertically
+            HStack(spacing: 10) {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onEdit()
+                } label: {
+                    Text("Edit")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.12), in: Capsule())
+                        .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Edit \(child.name)")
+
+                Menu {
+                    Button(role: .destructive) { onDelete() } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                        .foregroundStyle(FuturistTheme.textSecondary)
+                        .padding(.horizontal, 2)
+                }
+                .accessibilityLabel("More actions for \(child.name)")
+            }
+            .frame(maxHeight: .infinity) // ensures optical vertical centering
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Screen
+struct ParentChildrenTabView: View {
+    @AppStorage("userRole") private var userRoleRawValue: String?
+    @AppStorage("selectedChildId") private var selectedChildIdRaw: String?
+    // 🔹 Optional: write last viewed child as soon as parent taps a child
+    @AppStorage("lastParentChildId") private var lastParentChildIdRaw: String?
+
+    @EnvironmentObject private var appState: AppState
+    @State private var showAddChild = false
+    @State private var childPendingDelete: ChildProfile?
+    @State private var childPendingEdit: ChildProfile?
+
+    // Neon rule spacing
+    private static let ruleLeadingInset: CGFloat = 16
+    private static let ruleTrailingInset: CGFloat = 14
+    private static let ruleExtraBottomPadding: CGFloat = 6
+    private static let ruleVerticalOffset: CGFloat = 6
+
+    private var childrenSorted: [ChildProfile] {
+        appState.children.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                CurvyAquaBlueBackground(animate: true)
+                    .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    // ===== Header (title + green + pill) =====
+                    HStack(alignment: .center) {
+                        Text("Parent")
+                            .font(.system(size: 34, weight: .semibold))
+                            .foregroundStyle(FuturistTheme.textPrimary)
+                            .accessibilityAddTraits(.isHeader)
+                        Spacer()
+                        GreenPillPlusButton {
+                            showAddChild = true
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 6)
+
+                    // ===== List of children =====
+                    if childrenSorted.isEmpty {
+                        VStack {
+                            Spacer(minLength: 24)
+                            Text("No children yet.")
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        List {
+                            Section {
+                                let items = childrenSorted
+                                ForEach(Array(items.enumerated()), id: \.element.id) { index, child in
+                                    // Card wrapper to place neon rule per-row
+                                    VStack(spacing: 0) {
+                                        ParentChildRow(
+                                            child: child,
+                                            destination: {
+                                                AnyView(
+                                                    ParentChildWeeklyView(childId: child.id)
+                                                        .environmentObject(appState)
+                                                )
+                                            },
+                                            onTappedInto: {
+                                                lastParentChildIdRaw = child.id.uuidString
+                                            },
+                                            onEdit: {
+                                                childPendingEdit = child
+                                            },
+                                            onDelete: {
+                                                childPendingDelete = child
+                                            }
+                                        )
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 10)
+                                    }
+                                    .padding(.bottom, Self.ruleExtraBottomPadding)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(CardBackground())
+                                    .overlay(alignment: .bottomLeading) {
+                                        if index < items.count - 1 {
+                                            NeonRule(
+                                                leadingInset: Self.ruleLeadingInset,
+                                                trailingInset: Self.ruleTrailingInset,
+                                                thickness: 2
+                                            )
+                                            .offset(y: Self.ruleVerticalOffset)
+                                        }
+                                    }
+
+                                    // 🔕 No swipeActions here (we use explicit trailing actions).
+                                }
+                            } header: {
+                                Text("Children")
+                                    .foregroundStyle(FuturistTheme.textPrimary)
+                                    .textCase(nil)
+                                    .padding(.top, 6)
+                                    .padding(.bottom, 4)
+                            }
+
+                            Section {
+                                Button("Switch Role (Temporary)") {
+                                    userRoleRawValue = nil
+                                    selectedChildIdRaw = nil
+                                }
+                                .foregroundStyle(.red)
+                            }
+                        }
+                        .scrollContentBackground(.hidden)
+                        .listStyle(.insetGrouped)
+                        .environment(\.defaultMinListHeaderHeight, 0)
+                    }
+                }
+            }
+            .toolbar(.hidden, for: .navigationBar) // we render our own header
+            .navigationBarTitleDisplayMode(.inline)
+
+            // ===== Sheets =====
+            .sheet(isPresented: $showAddChild) {
+                AddChildView()
+                    .environmentObject(appState)
+            }
+            .sheet(item: $childPendingEdit) { child in
+                EditChildView(child: child)
+                    .environmentObject(appState)
+            }
+
+            // ===== Delete confirm =====
+            .alert(
+                "Delete child?",
+                isPresented: Binding(
+                    get: { childPendingDelete != nil },
+                    set: { if !$0 { childPendingDelete = nil } }
+                )
+            ) {
+                Button("Delete", role: .destructive) {
+                    if let child = childPendingDelete {
+                        appState.deleteChild(id: child.id)
+                    }
+                    childPendingDelete = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    childPendingDelete = nil
+                }
+            } message: {
+                Text("This will remove the child and all their assignments and completion history.")
+            }
+        }
+    }
 }

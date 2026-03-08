@@ -131,7 +131,7 @@ private struct EditEventTopBar: View {
     }
 }
 
-// MARK: - Controls (toggle, chips, chips/tint)
+// MARK: - Controls (toggle, chips)
 private struct NeonOutlineToggleStyle: ToggleStyle {
     var onTint: Color = FuturistTheme.neonAqua
     var offStroke: Color = FuturistTheme.neonAqua.opacity(0.70)
@@ -238,6 +238,207 @@ private struct InlineWheelTimePicker: View {
     }
 }
 
+// MARK: - Multi‑select child picker (Futurist; push with Apply)
+private struct AssignToPickerScreen: View {
+    let allChildren: [ChildProfile]
+    let preselected: Set<UUID>
+    var onApply: (Set<UUID>) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var working: Set<UUID> = []
+    @State private var query: String = ""
+
+    private var filteredChildren: [ChildProfile] {
+        let sorted = allChildren.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return sorted }
+        return sorted.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    private var canApply: Bool { !working.isEmpty }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            CurvyAquaBlueBackground(animate: true).ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Search
+                    FrostedCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Search")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(FuturistTheme.textSecondary)
+                            HStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                TextField("Find a child…", text: $query)
+                                    .textInputAutocapitalization(.words)
+                                    .autocorrectionDisabled(true)
+                                    .foregroundStyle(FuturistTheme.textPrimary)
+                            }
+                            .padding(10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+
+                    BrightLineSeparator()
+
+                    // Children list
+                    FrostedCard {
+                        VStack(spacing: 0) {
+                            ForEach(filteredChildren) { child in
+                                let checked = working.contains(child.id)
+                                Button {
+                                    if checked { working.remove(child.id) } else { working.insert(child.id) }
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        ChildAvatarCircleView(colorHex: child.colorHex, avatarId: child.avatarId, size: 32)
+                                        Text(child.name)
+                                            .foregroundStyle(FuturistTheme.textPrimary)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(checked ? FuturistTheme.neonAqua : Color.white.opacity(0.45))
+                                            .accessibilityHidden(true)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(checked ? Color.white.opacity(0.06) : Color.clear)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(child.name), \(checked ? "selected" : "not selected")")
+
+                                if child.id != filteredChildren.last?.id {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.08))
+                                        .frame(height: 1)
+                                        .padding(.leading, 46)
+                                        .accessibilityHidden(true)
+                                }
+                            }
+
+                            if filteredChildren.isEmpty {
+                                Text("No matches")
+                                    .font(.footnote)
+                                    .foregroundStyle(FuturistTheme.textSecondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    BrightLineSeparator()
+
+                    // Select All / Clear All
+                    FrostedCard {
+                        HStack(spacing: 12) {
+                            Button {
+                                working = Set(allChildren.map(\.id))
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Select All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                working.removeAll()
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text("Clear All")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.12), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            Spacer()
+                        }
+                    }
+                    .padding(.horizontal, 12)
+
+                    Spacer(minLength: 24)
+                }
+                .padding(.bottom, 24)
+            }
+        }
+        // Hide system nav; themed header with Cancel/Apply
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                // add the same cushion used elsewhere so the pills don't hug the top corner radius
+                Color.clear.frame(height: 12)
+
+                let pillW: CGFloat = 76, pillH: CGFloat = 32
+                ZStack {
+                    Text("Assign To")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(FuturistTheme.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+
+                    HStack {
+                        ToolbarPillButton(
+                            label: "Cancel",
+                            foreground: .white,
+                            background: FuturistTheme.softRedLight,
+                            stroke: FuturistTheme.softRedBase.opacity(0.75),
+                            width: pillW, height: pillH,
+                            action: { dismiss() }
+                        )
+                        Spacer(minLength: 12)
+                        ToolbarPillButton(
+                            label: "Apply",
+                            foreground: canApply ? Color.black.opacity(0.9) : FuturistTheme.textSecondary,
+                            background: canApply ? FuturistTheme.softGreenLight : Color.clear,
+                            stroke: canApply ? FuturistTheme.softGreenBase.opacity(0.75)
+                                             : FuturistTheme.textSecondary.opacity(0.35),
+                            disabled: !canApply,
+                            glow: canApply,
+                            width: pillW, height: pillH,
+                            action: {
+                                guard canApply else { return }
+                                onApply(working)
+                                dismiss()
+                            }
+                        )
+                    }
+                    .padding(.horizontal, 16)   // 🔧 NEW: add side buffer so pills don't hug screen edges
+                    .padding(.bottom, 8)
+                }
+                .background(Color.clear)
+            }
+        }
+        .onAppear { working = preselected }
+    }
+}
+
 // MARK: - Edit Event (drop‑in)
 struct EditEventAssignmentView: View {
     // Environment
@@ -254,6 +455,23 @@ struct EditEventAssignmentView: View {
     // Fields
     @State private var helperText: String
     @State private var isActive: Bool
+
+    // NEW: Assign To — multi-select with a primary child
+    @State private var assignedChildId: UUID                // primary
+    @State private var multiSelectedChildIds: Set<UUID>     // all selected
+    @State private var showAssignToPicker = false
+
+    private var assigneesSummaryText: String {
+        let allIds = Set(appState.children.map(\.id))
+        if multiSelectedChildIds == allIds && !allIds.isEmpty { return "All children" }
+        let names = appState.children
+            .filter { multiSelectedChildIds.contains($0.id) }
+            .map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        if names.isEmpty { return "None" }
+        if names.count <= 2 { return names.joined(separator: ", ") }
+        return "\(names[0]), +\(names.count - 1) more"
+    }
 
     // Location (optional)
     @State private var selectedLocationId: UUID?
@@ -307,7 +525,7 @@ struct EditEventAssignmentView: View {
     // Inline hint for Option‑B (bump to tomorrow)
     @State private var skipTodayInfo: String? = nil
 
-    // Segmented control appearance backups (readability parity with Task screens)
+    // Segmented control appearance backups
     @State private var prevSegTitleAttrsNormal: [NSAttributedString.Key: Any]?
     @State private var prevSegTitleAttrsSelected: [NSAttributedString.Key: Any]?
     @State private var prevSelectedTintColor: UIColor?
@@ -318,6 +536,10 @@ struct EditEventAssignmentView: View {
 
         _helperText = State(initialValue: assignment.helper ?? "")
         _isActive    = State(initialValue: assignment.isActive)
+
+        // NEW: multi‑select (seed with current assignee)
+        _assignedChildId = State(initialValue: assignment.childId)
+        _multiSelectedChildIds = State(initialValue: [assignment.childId])
 
         _selectedLocationId           = State(initialValue: assignment.locationId)
         _selectedLocationNameSnapshot = State(initialValue: assignment.locationNameSnapshot)
@@ -335,8 +557,6 @@ struct EditEventAssignmentView: View {
         _finishTimeEnabled = State(initialValue: assignment.finishTime != nil)
         _finishTime        = State(initialValue: assignment.finishTime ?? now)
 
-        // Duration removed from UI (we will persist nil on save)
-
         _alertMe            = State(initialValue: assignment.alertMe)
         _alertOffsetMinutes = State(initialValue: assignment.alertOffsetMinutes ?? 10)
 
@@ -348,27 +568,20 @@ struct EditEventAssignmentView: View {
         _finishNotifyOffsetMinutes = State(initialValue: assignment.finishNotifyOffsetMinutes ?? 0)
     }
 
-    // MARK: - Helpers
+    // Helpers
     private var isoCalendar: Calendar {
         var cal = Calendar(identifier: .iso8601); cal.timeZone = .current; return cal
     }
     private func dayOnly(_ date: Date) -> Date { isoCalendar.startOfDay(for: date) }
+    private var startDatePickerLowerBound: Date { min(dayOnly(Date()), dayOnly(original.startDate)) }
 
-    private var startDatePickerLowerBound: Date {
-        // allow choosing the original past date as lower bound
-        min(dayOnly(Date()), dayOnly(original.startDate))
-    }
-
-    // Monday‑first weekday index helper: 0=Mon ... 6=Sun
     private func weekdayIndexMondayFirst(for date: Date) -> Int {
         switch isoCalendar.component(.weekday, from: date) {
         case 2: return 0; case 3: return 1; case 4: return 2; case 5: return 3; case 6: return 4; case 7: return 5
         default: return 6
         }
     }
-    private func isTodaySelectedWeekday() -> Bool {
-        selectedWeekdays.contains(weekdayIndexMondayFirst(for: startDate))
-    }
+    private func isTodaySelectedWeekday() -> Bool { selectedWeekdays.contains(weekdayIndexMondayFirst(for: startDate)) }
 
     private func showLocalToast(_ message: String) {
         withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) { localToastMessage = message }
@@ -377,13 +590,11 @@ struct EditEventAssignmentView: View {
         }
     }
 
-    /// Keep finish time ≥ start time when both enabled.
     private func clampFinishNotBeforeStart() {
         guard startTimeEnabled, finishTimeEnabled else { return }
         if finishTime < startTime { finishTime = startTime }
     }
 
-    // Option‑B: Specified Days + past start time today → bump Start Date +1 day with hint
     private func handlePastTimeOnTodayIfNeeded() {
         guard occurrence == .specifiedDays else { skipTodayInfo = nil; return }
         let today = dayOnly(Date())
@@ -408,7 +619,6 @@ struct EditEventAssignmentView: View {
         }
     }
 
-    // Allowed weekdays in Start..Finish range
     private var allowedWeekdays: Set<Int> {
         guard finishDateEnabled else { return Set(0..<7) }
         let start = dayOnly(startDate), end = dayOnly(finishDate)
@@ -452,20 +662,16 @@ struct EditEventAssignmentView: View {
         }
     }
 
-    // MARK: - Enforcement (Edit-mode friendly)
+    // Enforcement
     private func enforceNoPastScheduling() {
         let now = Date()
         let today = dayOnly(Date())
 
-        // ❌ Removed: automatic clamping of past Start Date to today (and its toast).
-
-        // Keep finish date ≥ start date
         if finishDateEnabled && dayOnly(finishDate) < dayOnly(startDate) {
             finishDate = startDate
             showLocalToast("Finish date adjusted to match start date.")
         }
 
-        // Same-day time sanity checks (only if not Specified Days)
         let isToday = (dayOnly(startDate) == today)
         if isToday && occurrence != .specifiedDays {
             let nowComps = isoCalendar.dateComponents([.hour, .minute], from: now)
@@ -481,7 +687,7 @@ struct EditEventAssignmentView: View {
         reconcileSelectedWeekdaysWithAllowed()
     }
 
-    // MARK: - Formatters
+    // Formatters
     private func dateString(_ date: Date) -> String {
         let df = DateFormatter(); df.calendar = isoCalendar; df.locale = .current
         df.dateFormat = "EEE, d MMM yyyy"; return df.string(from: date)
@@ -491,9 +697,49 @@ struct EditEventAssignmentView: View {
         df.dateStyle = .none; df.timeStyle = .short; return df.string(from: date)
     }
 
-    // MARK: - Save (persist Notify + schedule)
+    // Duplicate detection (ignore duration)
+    private func isExactDuplicateEvent(_ proposed: EventAssignment) -> Bool {
+        appState.eventAssignments.contains { existing in
+            guard existing.childId == proposed.childId else { return false }
+            guard existing.templateId == proposed.templateId else { return false }
+            guard existing.eventTitle == proposed.eventTitle else { return false }
+            guard existing.eventIcon == proposed.eventIcon else { return false }
+            guard (existing.helper ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                  == (proposed.helper ?? "").trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+            guard existing.isActive == proposed.isActive else { return false }
+            guard dayOnly(existing.startDate) == dayOnly(proposed.startDate) else { return false }
+            guard existing.endDate.map(dayOnly) == proposed.endDate.map(dayOnly) else { return false }
+            guard existing.occurrence == proposed.occurrence else { return false }
+            guard existing.weekdays.sorted() == proposed.weekdays.sorted() else { return false }
+            guard existing.startTime == proposed.startTime else { return false }
+            guard existing.finishTime == proposed.finishTime else { return false }
+            guard existing.locationId == proposed.locationId else { return false }
+            guard existing.locationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
+                  == proposed.locationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+            guard existing.alertMe == proposed.alertMe else { return false }
+            guard existing.alertOffsetMinutes == proposed.alertOffsetMinutes else { return false }
+            guard existing.startNotifyEnabled == proposed.startNotifyEnabled else { return false }
+            guard existing.startNotifyRecipient == proposed.startNotifyRecipient else { return false }
+            guard existing.startNotifyOffsetMinutes == proposed.startNotifyOffsetMinutes else { return false }
+            guard existing.finishNotifyEnabled == proposed.finishNotifyEnabled else { return false }
+            guard existing.finishNotifyRecipient == proposed.finishNotifyRecipient else { return false }
+            guard existing.finishNotifyOffsetMinutes == proposed.finishNotifyOffsetMinutes else { return false }
+            return true
+        }
+    }
+
+    // Save (update primary + duplicate to additional children)
     private func saveEdits() {
         enforceNoPastScheduling()
+
+        // Choose a primary child: keep current if still selected; else first A→Z
+        let primaryId: UUID = {
+            if multiSelectedChildIds.contains(assignedChildId) { return assignedChildId }
+            let sorted = appState.children
+                .filter { multiSelectedChildIds.contains($0.id) }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            return sorted.first?.id ?? assignedChildId
+        }()
 
         let eventTitle  = selectedTemplate?.title ?? original.eventTitle
         let eventIcon   = selectedTemplate?.iconSymbol ?? original.eventIcon
@@ -512,45 +758,78 @@ struct EditEventAssignmentView: View {
         let persistedStartOffset: Int?  = startNotifyEnabled  ? max(0, startNotifyOffsetMinutes)  : nil
         let persistedFinishOffset: Int? = finishNotifyEnabled ? max(0, finishNotifyOffsetMinutes) : nil
 
+        // Update original for primary child
         var updated = original
-        updated.templateId = templateId
-        updated.eventTitle = eventTitle
-        updated.eventIcon  = eventIcon
-        updated.helper = helperOrNil
-        updated.isActive = isActive
-        updated.startDate = startDate
-        updated.endDate   = end
-        updated.occurrence = occurrence
-        updated.weekdays   = weekdays
-        updated.startTime  = startTimeValue
-        updated.finishTime = finishTimeValue
-
-        // ❌ Duration removed
+        updated.childId     = primaryId
+        updated.templateId  = templateId
+        updated.eventTitle  = eventTitle
+        updated.eventIcon   = eventIcon
+        updated.helper      = helperOrNil
+        updated.isActive    = isActive
+        updated.startDate   = startDate
+        updated.endDate     = end
+        updated.occurrence  = occurrence
+        updated.weekdays    = weekdays
+        updated.startTime   = startTimeValue
+        updated.finishTime  = finishTimeValue
         updated.durationMinutes = nil
-
-        updated.locationId = selectedLocationId
+        updated.locationId  = selectedLocationId
         updated.locationNameSnapshot = selectedLocationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Legacy alert values persisted as-is (no UI here)
-        updated.alertMe = alertMe
+        updated.alertMe     = alertMe
         updated.alertOffsetMinutes = alertMe ? max(0, alertOffsetMinutes) : nil
-
-        // Notify
         updated.startNotifyEnabled = startNotifyEnabled
         updated.startNotifyRecipient = startNotifyRecipient
         updated.startNotifyOffsetMinutes = persistedStartOffset
         updated.finishNotifyEnabled = finishNotifyEnabled
         updated.finishNotifyRecipient = finishNotifyRecipient
         updated.finishNotifyOffsetMinutes = persistedFinishOffset
-
-        updated.updatedAt = Date()
+        updated.updatedAt  = Date()
 
         _ = appState.updateEventAssignment(updated)
 
-        if updated.isActive {
-            NotificationManager.shared.scheduleNext(for: updated, audience: currentAudience())
-        } else {
-            NotificationManager.shared.cancelAllForEvent(id: updated.id)
+        // Duplicates for additional children (skip exact duplicates)
+        let extras = multiSelectedChildIds.subtracting([primaryId])
+        var createdAssignments: [EventAssignment] = []
+        for cid in extras {
+            let dup = EventAssignment(
+                childId: cid,
+                templateId: updated.templateId,
+                eventTitle: updated.eventTitle,
+                eventIcon: updated.eventIcon,
+                helper: updated.helper,
+                isActive: updated.isActive,
+                startDate: updated.startDate,
+                endDate: updated.endDate,
+                occurrence: updated.occurrence,
+                weekdays: updated.weekdays,
+                startTime: updated.startTime,
+                finishTime: updated.finishTime,
+                durationMinutes: nil,
+                locationId: updated.locationId,
+                locationNameSnapshot: updated.locationNameSnapshot,
+                alertMe: updated.alertMe,
+                alertOffsetMinutes: updated.alertOffsetMinutes,
+                startNotifyEnabled: updated.startNotifyEnabled,
+                startNotifyRecipient: updated.startNotifyRecipient,
+                startNotifyOffsetMinutes: updated.startNotifyOffsetMinutes,
+                finishNotifyEnabled: updated.finishNotifyEnabled,
+                finishNotifyRecipient: updated.finishNotifyRecipient,
+                finishNotifyOffsetMinutes: updated.finishNotifyOffsetMinutes,
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            if !isExactDuplicateEvent(dup) {
+                _ = appState.createEventAssignment(dup)
+                createdAssignments.append(dup)
+            }
+        }
+
+        // Notifications for updated + duplicates
+        if updated.isActive { NotificationManager.shared.scheduleNext(for: updated, audience: currentAudience()) }
+        else { NotificationManager.shared.cancelAllForEvent(id: updated.id) }
+
+        for ev in createdAssignments where ev.isActive {
+            NotificationManager.shared.scheduleNext(for: ev, audience: currentAudience())
         }
 
         dismiss()
@@ -558,15 +837,13 @@ struct EditEventAssignmentView: View {
 
     private func currentAudience() -> NotificationAudience { .parent }
 
-    // MARK: - Weekday chip
+    // Weekday chip
     @ViewBuilder
     private func weekdayChipCompact(index: Int, label: String, isSelected: Bool, isAllowed: Bool) -> some View {
         let borderColor: Color = { if !isAllowed { return FuturistTheme.cardStroke }
                                    return isSelected ? FuturistTheme.neonAqua : FuturistTheme.chipBorder }()
-
         let textColor: Color = { if !isAllowed { return FuturistTheme.chipDisabled }
                                  return FuturistTheme.textPrimary }()
-
         let fill: Color = isSelected ? FuturistTheme.neonAqua.opacity(0.18) : .clear
 
         Text(label)
@@ -597,7 +874,7 @@ struct EditEventAssignmentView: View {
                 ScrollView {
                     VStack(spacing: 0) {
 
-                        // 1) EVENT (template, helper, active)
+                        // 1) EVENT
                         FrostedCard {
                             Button { showSelectEvent = true } label: {
                                 HStack(alignment: .top, spacing: 12) {
@@ -631,9 +908,8 @@ struct EditEventAssignmentView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            .accessibilityHint("Opens event templates")
 
-                            // Collapsible helper
+                            // Helper (collapsible)
                             VStack(alignment: .leading, spacing: 8) {
                                 Button {
                                     withAnimation(.easeInOut(duration: 0.18)) { showHelperEditor.toggle() }
@@ -676,13 +952,32 @@ struct EditEventAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 2) LOCATION (Optional)
+                        // 2) ASSIGN TO — multi-select summary + push
+                        FrostedCard {
+                            Button { showAssignToPicker = true } label: {
+                                HStack {
+                                    Text("Assign To").foregroundStyle(FuturistTheme.textPrimary)
+                                    Spacer()
+                                    Text(assigneesSummaryText).foregroundStyle(FuturistTheme.textSecondary)
+                                    Image(systemName: "chevron.right")
+                                        .foregroundStyle(FuturistTheme.textSecondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(Text("Assign To \(assigneesSummaryText)"))
+                        }
+                        .padding(.horizontal, 12)
+
+                        BrightLineSeparator()
+
+                        // 3) LOCATION (Optional)
                         FrostedCard {
                             Button { showLocationPicker = true } label: {
                                 HStack {
                                     Text("Location (Optional)").foregroundStyle(FuturistTheme.textPrimary)
                                     Spacer()
-                                    let displayName = selectedLocationNameSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    let displayName = selectedLocationNameSnapshot
+                                        .trimmingCharacters(in: .whitespacesAndNewlines)
                                     Text(displayName.isEmpty ? "None" : displayName)
                                         .foregroundStyle(FuturistTheme.textSecondary)
                                     Image(systemName: "chevron.right")
@@ -695,7 +990,7 @@ struct EditEventAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 3) DATES
+                        // 4) DATES
                         FrostedCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 Button {
@@ -759,7 +1054,7 @@ struct EditEventAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 4) OCCURRENCE
+                        // 5) OCCURRENCE
                         FrostedCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 Picker("Occurrence", selection: $occurrence) {
@@ -801,7 +1096,7 @@ struct EditEventAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 5) TIME + NOTIFY
+                        // 6) TIME + NOTIFY
                         FrostedCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 // START TIME
@@ -928,7 +1223,7 @@ struct EditEventAssignmentView: View {
 
                         BrightLineSeparator()
 
-                        // 6) DELETE (High-contrast pill)
+                        // 7) DELETE (High-contrast pill)
                         FrostedCard {
                             Button {
                                 showDeleteConfirm = true
@@ -941,7 +1236,7 @@ struct EditEventAssignmentView: View {
                                 }
                                 .foregroundStyle(Color.white)
                                 .frame(maxWidth: .infinity, minHeight: 44)
-                                .padding(.vertical, 2) // slight cushion inside the pill
+                                .padding(.vertical, 2)
                                 .background(Capsule().fill(FuturistTheme.softRedBase))
                                 .overlay(
                                     Capsule()
@@ -966,14 +1261,14 @@ struct EditEventAssignmentView: View {
                         .zIndex(10)
                 }
             }
-            // Hide system nav bar; we draw our own header
+            // Hide system nav; we draw our own header
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
 
-            // ✅ Custom top bar with a 12‑pt cushion so pills don’t hug the sheet’s top radius
+            // Header with a 12‑pt cushion
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: 12) // ← cushion
+                    Color.clear.frame(height: 12)
                     EditEventTopBar(
                         canSave: canSave,
                         onCancel: { dismiss() },
@@ -1001,22 +1296,35 @@ struct EditEventAssignmentView: View {
                 }
             }
 
-            // Segmented control readability (parity with Task screens)
-            .onAppear {
-                // ⛔️ Removed automatic enforcement on appear to avoid altering stored past dates
-                // enforceNoPastScheduling()
-                // handlePastTimeOnTodayIfNeeded()
+            // NEW: Assign To picker (push) — multi-select with Apply
+            .navigationDestination(isPresented: $showAssignToPicker) {
+                AssignToPickerScreen(
+                    allChildren: appState.children,
+                    preselected: multiSelectedChildIds,
+                    onApply: { pickedSet in
+                        let sorted = appState.children
+                            .filter { pickedSet.contains($0.id) }
+                            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                        if pickedSet.contains(assignedChildId) {
+                            assignedChildId = assignedChildId
+                        } else {
+                            assignedChildId = sorted.first?.id ?? assignedChildId
+                        }
+                        multiSelectedChildIds = pickedSet
+                    }
+                )
+            }
 
+            // Segmented control readability
+            .onAppear {
                 prevSegTitleAttrsNormal   = UISegmentedControl.appearance().titleTextAttributes(for: .normal)
                 prevSegTitleAttrsSelected = UISegmentedControl.appearance().titleTextAttributes(for: .selected)
                 prevSelectedTintColor     = UISegmentedControl.appearance().selectedSegmentTintColor
 
-                // Selected: dark text on white pill
                 let selectedTitleAttrs: [NSAttributedString.Key: Any] = [
                     .foregroundColor: UIColor(Color(red: 0.08, green: 0.14, blue: 0.24)),
                     .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
                 ]
-                // Unselected: bright, readable light text
                 let normalTitleAttrs: [NSAttributedString.Key: Any] = [
                     .foregroundColor: UIColor(FuturistTheme.textPrimary.opacity(0.92)),
                     .font: UIFont.systemFont(ofSize: 14, weight: .semibold)
